@@ -29,3 +29,24 @@ yarn-error.log*
 
 # TypeScript
 *.tsbuildinfo
+
+# SSH keys and credentials
+.ssh/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# OS files
+Thumbs.db
+.DS_Store
+Desktop.ini
+.fseventsd/
+.Spotlight-V100/
+.Trashes/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
