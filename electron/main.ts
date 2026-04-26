@@ -26,7 +26,9 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      webSecurity: false,
+      allowRunningInsecureContent: true
     }
   });
 
@@ -34,7 +36,8 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    // 生产模式下，dist 目录在项目根目录
+    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
 
   mainWindow.on('closed', () => {
@@ -78,7 +81,7 @@ ipcMain.handle('get-all-assets', () => {
   return getAllAssets();
 });
 
-ipcMain.handle('get-assets-by-tag', (_, tagId: number) => {
+ipcMain.handle('get-assets-by-tag', (_event: Electron.IpcMainInvokeEvent, tagId: number) => {
   return getAssetsByTag(tagId);
 });
 
@@ -86,41 +89,41 @@ ipcMain.handle('get-all-tags', () => {
   return getAllTags();
 });
 
-ipcMain.handle('add-tag-to-asset', (_, assetId: number, tagName: string) => {
+ipcMain.handle('add-tag-to-asset', (_event: Electron.IpcMainInvokeEvent, assetId: number, tagName: string) => {
   const tagId = getOrCreateTag(tagName);
   attachTagToAsset(assetId, tagId);
   return { success: true, tagId };
 });
 
-ipcMain.handle('remove-tag-from-asset', (_, assetId: number, tagId: number) => {
+ipcMain.handle('remove-tag-from-asset', (_event: Electron.IpcMainInvokeEvent, assetId: number, tagId: number) => {
   detachTagFromAsset(assetId, tagId);
   return { success: true };
 });
 
-ipcMain.handle('search-tags', (_, query: string) => {
+ipcMain.handle('search-tags', (_event: Electron.IpcMainInvokeEvent, query: string) => {
   return searchTags(query);
 });
 
-ipcMain.handle('delete-tag', (_, tagId: number) => {
+ipcMain.handle('delete-tag', (_event: Electron.IpcMainInvokeEvent, tagId: number) => {
   deleteTag(tagId);
   return { success: true };
 });
 
-ipcMain.handle('get-assets-by-tags', (_, tagIds: number[]) => {
+ipcMain.handle('get-assets-by-tags', (_event: Electron.IpcMainInvokeEvent, tagIds: number[]) => {
   return getAssetsByTags(tagIds);
 });
 
-ipcMain.handle('delete-asset', (_, assetId: number) => {
+ipcMain.handle('delete-asset', (_event: Electron.IpcMainInvokeEvent, assetId: number) => {
   deleteAsset(assetId);
   return { success: true };
 });
 
-ipcMain.handle('search-assets', (_, query: string) => {
+ipcMain.handle('search-assets', (_event: Electron.IpcMainInvokeEvent, query: string) => {
   return searchAssets(query);
 });
 
 // AI 导出功能
-ipcMain.handle('export-copy-paths', async (_, assetIds: number[]) => {
+ipcMain.handle('export-copy-paths', async (_event: Electron.IpcMainInvokeEvent, assetIds: number[]) => {
   try {
     const allAssets = getAllAssets();
     const selectedAssets = allAssets.filter(asset => assetIds.includes(asset.id));
@@ -135,7 +138,7 @@ ipcMain.handle('export-copy-paths', async (_, assetIds: number[]) => {
   }
 });
 
-ipcMain.handle('export-to-folder', async (_, assetIds: number[]) => {
+ipcMain.handle('export-to-folder', async (_event: Electron.IpcMainInvokeEvent, assetIds: number[]) => {
   try {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openDirectory'],
@@ -168,7 +171,7 @@ ipcMain.handle('export-to-folder', async (_, assetIds: number[]) => {
   }
 });
 
-ipcMain.handle('export-json-metadata', async (_, assetIds: number[]) => {
+ipcMain.handle('export-json-metadata', async (_event: Electron.IpcMainInvokeEvent, assetIds: number[]) => {
   try {
     const result = await dialog.showSaveDialog(mainWindow!, {
       defaultPath: '素材元数据.json',
