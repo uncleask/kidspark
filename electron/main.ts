@@ -5,6 +5,7 @@ import {
   getAllAssets,
   getAssetsByTag,
   getAssetsByTags,
+  getAssetsByType,
   getAllTags,
   getOrCreateTag,
   attachTagToAsset,
@@ -120,6 +121,10 @@ ipcMain.handle('delete-asset', (_event: Electron.IpcMainInvokeEvent, assetId: nu
 
 ipcMain.handle('search-assets', (_event: Electron.IpcMainInvokeEvent, query: string) => {
   return searchAssets(query);
+});
+
+ipcMain.handle('get-assets-by-type', (_event: Electron.IpcMainInvokeEvent, fileType: 'image' | 'video' | 'audio') => {
+  return getAssetsByType(fileType);
 });
 
 // AI 导出功能

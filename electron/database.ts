@@ -196,6 +196,26 @@ export function searchAssets(searchQuery: string): Asset[] {
   }));
 }
 
+export function getAssetsByType(fileType: 'image' | 'video' | 'audio'): Asset[] {
+  const stmt = db.prepare(`
+    SELECT a.*, GROUP_CONCAT(t.id || ':' || t.tag_name) as tags_str
+    FROM assets a
+    LEFT JOIN asset_tags at ON a.id = at.asset_id
+    LEFT JOIN tags t ON at.tag_id = t.id
+    WHERE a.file_type = ?
+    GROUP BY a.id
+    ORDER BY a.created_at DESC
+  `);
+  const rows = stmt.all(fileType) as any[];
+  return rows.map(row => ({
+    ...row,
+    tags: row.tags_str ? row.tags_str.split(',').map((t: string) => {
+      const [id, tag_name] = t.split(':');
+      return { id: parseInt(id), tag_name };
+    }) : []
+  }));
+}
+
 /**
  * 检查文件是否已存在于数据库中
  * @param filePath 文件路径

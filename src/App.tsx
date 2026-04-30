@@ -26,7 +26,10 @@ import {
   SearchOutlined,
   ExportOutlined,
   CheckCircleOutlined,
-  CloseCircleOutlined
+  CloseCircleOutlined,
+  PictureOutlined,
+  VideoCameraOutlined,
+  AudioOutlined
 } from '@ant-design/icons';
 import AssetCard from './components/AssetCard';
 import AssetPreviewModal from './components/AssetPreviewModal';
@@ -40,6 +43,7 @@ const App: React.FC = () => {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
+  const [selectedType, setSelectedType] = useState<'all' | 'image' | 'video' | 'audio'>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedAssetIds, setSelectedAssetIds] = useState<number[]>([]);
@@ -48,11 +52,13 @@ const App: React.FC = () => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   // 获取资产数据
-  const fetchAssets = async (tagIds: number[] = [], query: string = '') => {
+  const fetchAssets = async (tagIds: number[] = [], query: string = '', type: 'all' | 'image' | 'video' | 'audio' = 'all') => {
     try {
       let fetchedAssets: Asset[];
       if (query) {
         fetchedAssets = await window.electronAPI.searchAssets(query);
+      } else if (type !== 'all') {
+        fetchedAssets = await window.electronAPI.getAssetsByType(type);
       } else if (tagIds.length > 0) {
         fetchedAssets = await window.electronAPI.getAssetsByTags(tagIds);
       } else {
@@ -75,9 +81,9 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchAssets(selectedTagIds, searchQuery);
+    fetchAssets(selectedTagIds, searchQuery, selectedType);
     fetchTags();
-  }, [selectedTagIds, searchQuery]);
+  }, [selectedTagIds, searchQuery, selectedType]);
 
   // 排序处理
   const sortedAssets = useMemo(() => {
@@ -114,6 +120,10 @@ const App: React.FC = () => {
 
   const handleClearAllTags = () => {
     setSelectedTagIds([]);
+  };
+
+  const handleTypeSelect = (type: 'all' | 'image' | 'video' | 'audio') => {
+    setSelectedType(type);
   };
 
   const handleDeleteTag = async (tagId: number, e: React.MouseEvent) => {
@@ -286,12 +296,55 @@ const App: React.FC = () => {
           <div style={{ padding: '16px' }}>
             <Title level={5} style={{ marginBottom: 16 }}>
               <InboxOutlined style={{ marginRight: 8 }} />
+              类型筛选
+            </Title>
+            <div style={{ marginBottom: 24 }}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <AntTag
+                  color={selectedType === 'all' ? 'blue' : 'default'}
+                  onClick={() => handleTypeSelect('all')}
+                  style={{ cursor: 'pointer', fontSize: '14px', padding: '4px 12px', width: '100%', textAlign: 'center' }}
+                >
+                  全部
+                </AntTag>
+                <AntTag
+                  color={selectedType === 'image' ? 'blue' : 'default'}
+                  onClick={() => handleTypeSelect('image')}
+                  style={{ cursor: 'pointer', fontSize: '14px', padding: '4px 12px', width: '100%', textAlign: 'center' }}
+                >
+                  <PictureOutlined style={{ marginRight: 4 }} />
+                  照片
+                </AntTag>
+                <AntTag
+                  color={selectedType === 'video' ? 'blue' : 'default'}
+                  onClick={() => handleTypeSelect('video')}
+                  style={{ cursor: 'pointer', fontSize: '14px', padding: '4px 12px', width: '100%', textAlign: 'center' }}
+                >
+                  <VideoCameraOutlined style={{ marginRight: 4 }} />
+                  视频
+                </AntTag>
+                <AntTag
+                  color={selectedType === 'audio' ? 'blue' : 'default'}
+                  onClick={() => handleTypeSelect('audio')}
+                  style={{ cursor: 'pointer', fontSize: '14px', padding: '4px 12px', width: '100%', textAlign: 'center' }}
+                >
+                  <AudioOutlined style={{ marginRight: 4 }} />
+                  音频
+                </AntTag>
+              </Space>
+            </div>
+
+            <Title level={5} style={{ marginBottom: 16 }}>
+              <TagsOutlined style={{ marginRight: 8 }} />
               标签筛选
             </Title>
             <div style={{ marginBottom: 12 }}>
               <AntTag
-                color={selectedTagIds.length === 0 ? 'blue' : 'default'}
-                onClick={handleClearAllTags}
+                color={selectedTagIds.length === 0 && selectedType === 'all' ? 'blue' : 'default'}
+                onClick={() => {
+                  handleClearAllTags();
+                  handleTypeSelect('all');
+                }}
                 style={{ cursor: 'pointer', fontSize: '14px', padding: '4px 12px' }}
               >
                 全部素材
@@ -325,6 +378,11 @@ const App: React.FC = () => {
                 </Checkbox>
                 <Text>
                   共 {sortedAssets.length} 个素材
+                  {selectedType !== 'all' && (
+                    <span style={{ marginLeft: 8 }}>
+                      （类型：{selectedType === 'image' ? '照片' : selectedType === 'video' ? '视频' : '音频'}）
+                    </span>
+                  )}
                   {selectedTagIds.length > 0 && (
                     <span style={{ marginLeft: 8 }}>
                       （筛选标签：{selectedTagIds.length}个）
