@@ -2,8 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import sharp from 'sharp';
-import ffmpeg from 'ffmpeg-static';
+let sharp: any = null;
+try {
+  sharp = require('sharp');
+} catch (error) {
+  console.warn('Sharp module not available, thumbnail generation will be skipped:', error);
+}
+let ffmpeg: string | null = null;
+try {
+  ffmpeg = require('ffmpeg-static');
+} catch (error) {
+  console.warn('ffmpeg-static module not available, video thumbnail generation will be skipped:', error);
+}
 import { insertAsset, checkAssetExists, getAppDataDir } from './database';
 
 const execFilePromise = promisify(execFile);
@@ -29,6 +39,10 @@ function getFileType(ext: string): 'image' | 'video' | 'audio' | null {
 }
 
 async function generateImageThumbnail(inputPath: string, outputPath: string) {
+  if (!sharp) {
+    console.warn('Sharp not available, skipping thumbnail generation');
+    return;
+  }
   await sharp(inputPath)
     .resize(300, null, { withoutEnlargement: true })
     .toFile(outputPath);

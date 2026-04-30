@@ -36,8 +36,8 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
-    // 生产模式下，dist 目录在项目根目录
-    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
+    // 生产模式下，dist 目录在 app 目录下
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
   mainWindow.on('closed', () => {
