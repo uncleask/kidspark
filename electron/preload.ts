@@ -18,7 +18,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAssetsByType: (fileType: 'image' | 'video' | 'audio') => ipcRenderer.invoke('get-assets-by-type', fileType) as Promise<Asset[]>,
   exportCopyPaths: (assetIds: number[]) => ipcRenderer.invoke('export-copy-paths', assetIds) as Promise<{ success: boolean; count?: number; error?: string }>,
   exportToFolder: (assetIds: number[]) => ipcRenderer.invoke('export-to-folder', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; error?: string }>,
-  exportJsonMetadata: (assetIds: number[]) => ipcRenderer.invoke('export-json-metadata', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>
+  exportJsonMetadata: (assetIds: number[]) => ipcRenderer.invoke('export-json-metadata', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>,
+  saveRotatedImage: (filePath: string, rotation: number) =>
+    ipcRenderer.invoke('save-rotated-image', filePath, rotation) as Promise<{ success: boolean; error?: string }>
 });
 
 declare global {
@@ -39,6 +41,7 @@ declare global {
       exportCopyPaths: (assetIds: number[]) => Promise<{ success: boolean; count?: number; error?: string }>;
       exportToFolder: (assetIds: number[]) => Promise<{ success: boolean; canceled?: boolean; count?: number; error?: string }>;
       exportJsonMetadata: (assetIds: number[]) => Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>;
+      saveRotatedImage: (filePath: string, rotation: number) => Promise<{ success: boolean; error?: string }>;
     };
   }
 }

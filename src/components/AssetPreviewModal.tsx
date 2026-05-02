@@ -1,6 +1,6 @@
-import React from 'react';
-import { Modal, Button, Tag as AntTag, Input, Space, message } from 'antd';
-import { VideoCameraOutlined, AudioOutlined, DeleteOutlined } from '@ant-design/icons';
+import React, { useState } from 'react';
+import { Modal, Button, Tag as AntTag, Input, Space, message, Tooltip } from 'antd';
+import { DeleteOutlined, UndoOutlined, RedoOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons';
 import { Asset, Tag } from '../types';
 
 interface AssetPreviewModalProps {
@@ -18,11 +18,45 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
   onTagUpdated,
   onDeleteAsset
 }) => {
-  const [tagInput, setTagInput] = React.useState('');
+  const [tagInput, setTagInput] = useState('');
+  const [rotation, setRotation] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
 
-  if (!asset) {
-    return null;
-  }
+  const handleRotateClockwise = () => {
+    setRotation((prev) => (prev + 90) % 360);
+  };
+
+  const handleRotateAnticlockwise = () => {
+    setRotation((prev) => (prev - 90 + 360) % 360);
+  };
+
+  const handleResetRotation = () => {
+    setRotation(0);
+  };
+
+  const handleSaveRotation = async () => {
+    if (!asset || rotation === 0) {
+      message.warning('请先旋转图片');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const result = await window.electronAPI.saveRotatedImage(asset.file_path, rotation);
+      if (result.success) {
+        message.success('图片已保存');
+        setRotation(0);
+        onTagUpdated();
+      } else {
+        message.error(result.error || '保存失败');
+      }
+    } catch (error) {
+      console.error('Failed to save rotated image:', error);
+      message.error('保存失败');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleAddTag = async () => {
     if (!tagInput.trim() || !asset) return;
@@ -65,14 +99,68 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
   };
 
   const renderPreviewContent = () => {
+    const imageStyle: React.CSSProperties = {
+      maxWidth: '100%',
+      maxHeight: '70vh',
+      display: 'block',
+      margin: '0 auto',
+      transform: `rotate(${rotation}deg)`,
+      transition: 'transform 0.3s ease'
+    };
+
     switch (asset.file_type) {
       case 'image':
         return (
-          <img
-            src={`file://${asset.file_path}`}
-            alt={asset.file_name}
-            style={{ maxWidth: '100%', maxHeight: '70vh', display: 'block', margin: '0 auto' }}
-          />
+          <>
+            <div style={{ marginBottom: '16px', textAlign: 'center' }}>
+              <Space>
+                <Tooltip title="逆时针旋转90°">
+                  <Button
+                    icon={<UndoOutlined />}
+                    onClick={handleRotateAnticlockwise}
+                  >
+                    逆时针
+                  </Button>
+                </Tooltip>
+                <Tooltip title="顺时针旋转90°">
+                  <Button
+                    icon={<RedoOutlined />}
+                    onClick={handleRotateClockwise}
+                  >
+                    顺时针
+                  </Button>
+                </Tooltip>
+                {rotation !== 0 && (
+                  <>
+                    <Button
+                      icon={<SyncOutlined />}
+                      onClick={handleResetRotation}
+                    >
+                      重置
+                    </Button>
+                    <Button
+                      type="primary"
+                      icon={<SaveOutlined />}
+                      onClick={handleSaveRotation}
+                      loading={isSaving}
+                    >
+                      保存旋转
+                    </Button>
+                  </>
+                )}
+              </Space>
+              {rotation !== 0 && (
+                <div style={{ marginTop: '8px', color: '#1890ff' }}>
+                  当前旋转：{rotation}°
+                </div>
+              )}
+            </div>
+            <img
+              src={`file://${asset.file_path}`}
+              alt={asset.file_name}
+              style={imageStyle}
+            />
+          </>
         );
       case 'video':
         return (
@@ -85,7 +173,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
       case 'audio':
         return (
           <div style={{ textAlign: 'center', padding: '40px 0' }}>
-            <AudioOutlined style={{ fontSize: '64px', color: '#1890ff', marginBottom: '16px' }} />
+            <div style={{ fontSize: '64px', color: '#1890ff', marginBottom: '16px' }}>🎵</div>
             <div>
               <audio
                 src={`file://${asset.file_path}`}

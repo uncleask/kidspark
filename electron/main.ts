@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, clipboard } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import sharp from 'sharp';
 import {
   getAllAssets,
   getAssetsByTag,
@@ -125,6 +126,26 @@ ipcMain.handle('search-assets', (_event: Electron.IpcMainInvokeEvent, query: str
 
 ipcMain.handle('get-assets-by-type', (_event: Electron.IpcMainInvokeEvent, fileType: 'image' | 'video' | 'audio') => {
   return getAssetsByType(fileType);
+});
+
+// 图片旋转功能
+ipcMain.handle('save-rotated-image', async (_event: Electron.IpcMainInvokeEvent, filePath: string, rotation: number) => {
+  try {
+    // 验证文件是否存在
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: '文件不存在' };
+    }
+
+    // 使用 sharp 旋转图片
+    await sharp(filePath)
+      .rotate(rotation)
+      .toFile(filePath);
+
+    return { success: true };
+  } catch (e) {
+    console.error('Failed to rotate image:', e);
+    return { success: false, error: String(e) };
+  }
 });
 
 // AI 导出功能
