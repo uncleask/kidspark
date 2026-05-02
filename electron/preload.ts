@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteAsset: (assetId: number) => ipcRenderer.invoke('delete-asset', assetId) as Promise<{ success: boolean }>,
   searchAssets: (query: string) => ipcRenderer.invoke('search-assets', query) as Promise<Asset[]>,
   getAssetsByType: (fileType: 'image' | 'video' | 'audio') => ipcRenderer.invoke('get-assets-by-type', fileType) as Promise<Asset[]>,
+  updateAssetDescription: (assetId: number, description: string) =>
+    ipcRenderer.invoke('update-asset-description', assetId, description) as Promise<{ success: boolean }>,
   exportCopyPaths: (assetIds: number[]) => ipcRenderer.invoke('export-copy-paths', assetIds) as Promise<{ success: boolean; count?: number; error?: string }>,
   exportToFolder: (assetIds: number[]) => ipcRenderer.invoke('export-to-folder', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; error?: string }>,
   exportJsonMetadata: (assetIds: number[]) => ipcRenderer.invoke('export-json-metadata', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>,
@@ -38,6 +40,7 @@ declare global {
       deleteAsset: (assetId: number) => Promise<{ success: boolean }>;
       searchAssets: (query: string) => Promise<Asset[]>;
       getAssetsByType: (fileType: 'image' | 'video' | 'audio') => Promise<Asset[]>;
+      updateAssetDescription: (assetId: number, description: string) => Promise<{ success: boolean }>;
       exportCopyPaths: (assetIds: number[]) => Promise<{ success: boolean; count?: number; error?: string }>;
       exportToFolder: (assetIds: number[]) => Promise<{ success: boolean; canceled?: boolean; count?: number; error?: string }>;
       exportJsonMetadata: (assetIds: number[]) => Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>;

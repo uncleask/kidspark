@@ -27,6 +27,7 @@ export function initDatabase() {
       file_type TEXT NOT NULL CHECK(file_type IN ('image', 'video', 'audio')),
       thumbnail_path TEXT,
       file_size INTEGER NOT NULL,
+      description TEXT DEFAULT '',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -55,10 +56,10 @@ const db = initDatabase();
 
 export function insertAsset(asset: Omit<Asset, 'id' | 'created_at' | 'updated_at' | 'tags'>): number {
   const stmt = db.prepare(`
-    INSERT INTO assets (file_name, file_path, file_type, thumbnail_path, file_size)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO assets (file_name, file_path, file_type, thumbnail_path, file_size, description)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
-  const result = stmt.run(asset.file_name, asset.file_path, asset.file_type, asset.thumbnail_path, asset.file_size);
+  const result = stmt.run(asset.file_name, asset.file_path, asset.file_type, asset.thumbnail_path, asset.file_size, asset.description || '');
   return result.lastInsertRowid as number;
 }
 
@@ -145,6 +146,11 @@ export function deleteAsset(assetId: number) {
   stmt.run(assetId);
 }
 
+export function updateAssetDescription(assetId: number, description: string) {
+  const stmt = db.prepare('UPDATE assets SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+  stmt.run(description, assetId);
+}
+
 export function getAssetsByTags(tagIds: number[]): Asset[] {
   if (tagIds.length === 0) {
     return getAllAssets();
@@ -172,7 +178,7 @@ export function getAssetsByTags(tagIds: number[]): Asset[] {
 }
 
 /**
- * 搜索素材（按文件名和标签搜索）
+ * 搜索素材（按文件名、标签和描述搜索）
  * @param searchQuery 搜索关键词
  */
 export function searchAssets(searchQuery: string): Asset[] {
@@ -182,11 +188,11 @@ export function searchAssets(searchQuery: string): Asset[] {
     FROM assets a
     LEFT JOIN asset_tags at ON a.id = at.asset_id
     LEFT JOIN tags t ON at.tag_id = t.id
-    WHERE LOWER(a.file_name) LIKE ? OR LOWER(t.tag_name) LIKE ?
+    WHERE LOWER(a.file_name) LIKE ? OR LOWER(t.tag_name) LIKE ? OR LOWER(a.description) LIKE ?
     GROUP BY a.id
     ORDER BY a.created_at DESC
   `);
-  const rows = stmt.all(`%${normalizedQuery}%`, `%${normalizedQuery}%`) as any[];
+  const rows = stmt.all(`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`) as any[];
   return rows.map(row => ({
     ...row,
     tags: row.tags_str ? row.tags_str.split(',').map((t: string) => {

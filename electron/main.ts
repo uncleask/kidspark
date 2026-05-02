@@ -14,7 +14,8 @@ import {
   searchTags,
   deleteTag,
   deleteAsset,
-  searchAssets
+  searchAssets,
+  updateAssetDescription
 } from './database';
 import { importFiles } from './fileHandler';
 import { Asset } from '../src/types';
@@ -128,6 +129,11 @@ ipcMain.handle('get-assets-by-type', (_event: Electron.IpcMainInvokeEvent, fileT
   return getAssetsByType(fileType);
 });
 
+ipcMain.handle('update-asset-description', (_event: Electron.IpcMainInvokeEvent, assetId: number, description: string) => {
+  updateAssetDescription(assetId, description);
+  return { success: true };
+});
+
 // 图片旋转功能
 ipcMain.handle('save-rotated-image', async (_event: Electron.IpcMainInvokeEvent, filePath: string, rotation: number) => {
   try {
@@ -217,6 +223,7 @@ ipcMain.handle('export-json-metadata', async (_event: Electron.IpcMainInvokeEven
       file_path: asset.file_path,
       file_type: asset.file_type,
       file_size: asset.file_size,
+      description: asset.description,
       tags: asset.tags || [],
       created_at: asset.created_at
     }));

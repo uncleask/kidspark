@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Modal, Button, Tag as AntTag, Input, Space, message, Tooltip } from 'antd';
-import { DeleteOutlined, UndoOutlined, RedoOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons';
+import { DeleteOutlined, UndoOutlined, RedoOutlined, SaveOutlined, SyncOutlined, EditOutlined } from '@ant-design/icons';
 import { Asset, Tag } from '../types';
+
+const { TextArea } = Input;
 
 interface AssetPreviewModalProps {
   asset: Asset | null;
@@ -21,6 +23,17 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
   const [tagInput, setTagInput] = useState('');
   const [rotation, setRotation] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
+  const [description, setDescription] = useState('');
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [isSavingDescription, setIsSavingDescription] = useState(false);
+
+  React.useEffect(() => {
+    if (asset) {
+      setDescription(asset.description || '');
+      setRotation(0);
+      setIsEditingDescription(false);
+    }
+  }, [asset]);
 
   const handleRotateClockwise = () => {
     setRotation((prev) => (prev + 90) % 360);
@@ -55,6 +68,23 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
       message.error('保存失败');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleSaveDescription = async () => {
+    if (!asset) return;
+
+    setIsSavingDescription(true);
+    try {
+      await window.electronAPI.updateAssetDescription(asset.id, description);
+      message.success('描述已保存');
+      setIsEditingDescription(false);
+      onTagUpdated();
+    } catch (error) {
+      console.error('Failed to save description:', error);
+      message.error('保存描述失败');
+    } finally {
+      setIsSavingDescription(false);
     }
   };
 
@@ -206,6 +236,57 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
       <div style={{ marginBottom: '16px' }}>
         {renderPreviewContent()}
       </div>
+      
+      {/* 描述输入区域 */}
+      <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '16px', marginBottom: '16px' }}>
+        <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontWeight: 500 }}>描述：</span>
+          {!isEditingDescription && description && (
+            <Button 
+              size="small" 
+              icon={<EditOutlined />} 
+              onClick={() => setIsEditingDescription(true)}
+            >
+              编辑
+            </Button>
+          )}
+        </div>
+        {isEditingDescription || !description ? (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <TextArea
+              placeholder="添加素材描述..."
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              maxLength={500}
+              showCount
+            />
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              onClick={handleSaveDescription}
+              loading={isSavingDescription}
+            >
+              保存描述
+            </Button>
+          </Space>
+        ) : (
+          <div 
+            style={{ 
+              padding: '8px 12px', 
+              background: '#f5f5f5', 
+              borderRadius: '4px',
+              cursor: 'pointer',
+              minHeight: '60px'
+            }}
+            onClick={() => setIsEditingDescription(true)}
+          >
+            {description}
+          </div>
+        )}
+      </div>
+
+      {/* 标签区域 */}
       <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '16px' }}>
         <Space wrap size={[8, 8]} style={{ marginBottom: '16px' }}>
           {asset.tags?.map(tag => (

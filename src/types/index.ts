@@ -5,6 +5,7 @@ export interface Asset {
   file_type: 'image' | 'video' | 'audio';
   thumbnail_path: string | null;
   file_size: number;
+  description?: string;
   created_at: string;
   updated_at: string;
   tags?: Tag[];
