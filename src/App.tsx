@@ -14,7 +14,8 @@ import {
   MenuProps,
   Modal,
   Checkbox,
-  Divider
+  Divider,
+  Tabs
 } from 'antd';
 import {
   UploadOutlined,
@@ -29,10 +30,12 @@ import {
   CloseCircleOutlined,
   PictureOutlined,
   VideoCameraOutlined,
-  AudioOutlined
+  AudioOutlined,
+  ExperimentOutlined
 } from '@ant-design/icons';
 import AssetCard from './components/AssetCard';
 import AssetPreviewModal from './components/AssetPreviewModal';
+import SampleImages from './components/SampleImages';
 import { Asset, Tag, SortOrder } from './types';
 
 const { Header, Content, Sider } = Layout;
@@ -365,73 +368,102 @@ const App: React.FC = () => {
             ))}
           </div>
         </Sider>
-        <Content style={{ padding: '24px', background: '#f5f5f5', overflow: 'auto' }}>
-          {sortedAssets.length > 0 && (
-            <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Space>
-                <Checkbox
-                  checked={selectedAssetIds.length > 0 && selectedAssetIds.length === sortedAssets.length}
-                  indeterminate={selectedAssetIds.length > 0 && selectedAssetIds.length < sortedAssets.length}
-                  onChange={e => handleSelectAll(e.target.checked)}
-                >
-                  全选
-                </Checkbox>
-                <Text>
-                  共 {sortedAssets.length} 个素材
-                  {selectedType !== 'all' && (
-                    <span style={{ marginLeft: 8 }}>
-                      （类型：{selectedType === 'image' ? '照片' : selectedType === 'video' ? '视频' : '音频'}）
-                    </span>
-                  )}
-                  {selectedTagIds.length > 0 && (
-                    <span style={{ marginLeft: 8 }}>
-                      （筛选标签：{selectedTagIds.length}个）
-                    </span>
-                  )}
-                  {selectedAssetIds.length > 0 && (
-                    <span style={{ marginLeft: 8, color: '#1890ff' }}>
-                      已选择 {selectedAssetIds.length} 个
-                    </span>
-                  )}
-                </Text>
-              </Space>
-              <Space>
-                <Radio.Group
-                  value={sortOrder}
-                  onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-                  buttonStyle="solid"
-                >
-                  <Radio.Button value="desc">
-                    <SortDescendingOutlined /> 最新优先
-                  </Radio.Button>
-                  <Radio.Button value="asc">
-                    <SortAscendingOutlined /> 最早优先
-                  </Radio.Button>
-                </Radio.Group>
-              </Space>
-            </div>
-          )}
+        <Content style={{ background: '#f5f5f5', overflow: 'auto' }}>
+          <Tabs
+            defaultActiveKey="assets"
+            type="card"
+            items={[
+              {
+                key: 'assets',
+                label: (
+                  <span>
+                    <InboxOutlined />
+                    素材库
+                  </span>
+                ),
+                children: (
+                  <div style={{ padding: '24px' }}>
+                    {sortedAssets.length > 0 && (
+                      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Space>
+                          <Checkbox
+                            checked={selectedAssetIds.length > 0 && selectedAssetIds.length === sortedAssets.length}
+                            indeterminate={selectedAssetIds.length > 0 && selectedAssetIds.length < sortedAssets.length}
+                            onChange={e => handleSelectAll(e.target.checked)}
+                          >
+                            全选
+                          </Checkbox>
+                          <Text>
+                            共 {sortedAssets.length} 个素材
+                            {selectedType !== 'all' && (
+                              <span style={{ marginLeft: 8 }}>
+                                （类型：{selectedType === 'image' ? '照片' : selectedType === 'video' ? '视频' : '音频'}）
+                              </span>
+                            )}
+                            {selectedTagIds.length > 0 && (
+                              <span style={{ marginLeft: 8 }}>
+                                （筛选标签：{selectedTagIds.length}个）
+                              </span>
+                            )}
+                            {selectedAssetIds.length > 0 && (
+                              <span style={{ marginLeft: 8, color: '#1890ff' }}>
+                                已选择 {selectedAssetIds.length} 个
+                              </span>
+                            )}
+                          </Text>
+                        </Space>
+                        <Space>
+                          <Radio.Group
+                            value={sortOrder}
+                            onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                            buttonStyle="solid"
+                          >
+                            <Radio.Button value="desc">
+                              <SortDescendingOutlined /> 最新优先
+                            </Radio.Button>
+                            <Radio.Button value="asc">
+                              <SortAscendingOutlined /> 最早优先
+                            </Radio.Button>
+                          </Radio.Group>
+                        </Space>
+                      </div>
+                    )}
 
-          {sortedAssets.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
-              <InboxOutlined style={{ fontSize: '64px', marginBottom: 16 }} />
-              <div>暂无素材，点击上方「导入素材」按钮开始使用</div>
-            </div>
-          ) : (
-            <Row gutter={[16, 16]}>
-              {sortedAssets.map(asset => (
-                <Col key={asset.id} xs={24} sm={12} md={8} lg={6} xl={4}>
-                  <AssetCard
-                    asset={asset}
-                    onTagUpdated={handleTagUpdated}
-                    onClick={() => handleAssetClick(asset)}
-                    isSelected={selectedAssetIds.includes(asset.id)}
-                    onSelect={handleSelectAsset}
-                  />
-                </Col>
-              ))}
-            </Row>
-          )}
+                    {sortedAssets.length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
+                        <InboxOutlined style={{ fontSize: '64px', marginBottom: 16 }} />
+                        <div>暂无素材，点击上方「导入素材」按钮开始使用</div>
+                      </div>
+                    ) : (
+                      <Row gutter={[16, 16]}>
+                        {sortedAssets.map(asset => (
+                          <Col key={asset.id} xs={24} sm={12} md={8} lg={6} xl={4}>
+                            <AssetCard
+                              asset={asset}
+                              onTagUpdated={handleTagUpdated}
+                              onClick={() => handleAssetClick(asset)}
+                              isSelected={selectedAssetIds.includes(asset.id)}
+                              onSelect={handleSelectAsset}
+                            />
+                          </Col>
+                        ))}
+                      </Row>
+                    )}
+                  </div>
+                )
+              },
+              {
+                key: 'samples',
+                label: (
+                  <span>
+                    <ExperimentOutlined />
+                    样例图片
+                  </span>
+                ),
+                children: <SampleImages />
+              }
+            ]}
+          />
         </Content>
       </Layout>
 

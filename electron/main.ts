@@ -15,10 +15,25 @@ import {
   deleteTag,
   deleteAsset,
   searchAssets,
-  updateAssetDescription
+  updateAssetDescription,
+  insertAiGeneration,
+  getAiGenerationsByAssetId,
+  getAiGenerationChain,
+  deleteAiGeneration,
+  getAppDataDir
 } from './database';
 import { importFiles } from './fileHandler';
-import { Asset } from '../src/types';
+import { importAiGenerationFile } from './fileHandler';
+import {
+  setWanXConfig,
+  getWanXConfig,
+  generateImage,
+  generateVideo,
+  getTaskStatus,
+  waitForTaskCompletion,
+  downloadToFile
+} from './wanxiang';
+import { Asset, AiGeneration, GenerationType } from '../src/types';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -134,15 +149,202 @@ ipcMain.handle('update-asset-description', (_event: Electron.IpcMainInvokeEvent,
   return { success: true };
 });
 
-// 图片旋转功能
+// AI 生成相关 IPC
+ipcMain.handle('save-ai-generation', (_event: Electron.IpcMainInvokeEvent, generation: Omit<AiGeneration, 'id' | 'created_at'>) => {
+  const id = insertAiGeneration(generation);
+  return { success: true, id };
+});
+
+ipcMain.handle('get-ai-generations-by-asset', (_event: Electron.IpcMainInvokeEvent, assetId: number) => {
+  return getAiGenerationsByAssetId(assetId);
+});
+
+ipcMain.handle('get-ai-generation-chain', (_event: Electron.IpcMainInvokeEvent, generationId: number) => {
+  return getAiGenerationChain(generationId);
+});
+
+ipcMain.handle('delete-ai-generation', (_event: Electron.IpcMainInvokeEvent, generationId: number) => {
+  deleteAiGeneration(generationId);
+  return { success: true };
+});
+
+// 导入AI生成内容（手动导入离线AI生成的文件）
+ipcMain.handle('import-ai-generation', async (
+  _event: Electron.IpcMainInvokeEvent,
+  originalAssetId: number,
+  parentGenerationId: number | null,
+  generationType: string,
+  prompt?: string
+) => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: ['openFile'],
+      title: '选择AI生成内容文件',
+      filters: [
+        { name: '图片/视频', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'mov', 'avi', 'mkv', 'webm'] },
+        { name: '所有文件', extensions: ['*'] }
+      ]
+    });
+
+    if (result.canceled) {
+      return { success: false, canceled: true };
+    }
+
+    const sourceFilePath = result.filePaths[0];
+    const importResult = await importAiGenerationFile(
+      originalAssetId,
+      parentGenerationId,
+      generationType,
+      sourceFilePath,
+      prompt
+    );
+
+    if (!importResult.success) {
+      return { success: false, error: importResult.error };
+    }
+
+    const genId = insertAiGeneration(importResult.generation!);
+    return { success: true, id: genId, generation: { ...importResult.generation, id: genId } };
+  } catch (e) {
+    console.error('Failed to import AI generation:', e);
+    return { success: false, error: String(e) };
+  }
+});
+
+// 配置阿里万相 API Key
+ipcMain.handle('set-wanx-config', async (
+  _event: Electron.IpcMainInvokeEvent,
+  apiKey: string
+) => {
+  setWanXConfig({ apiKey });
+  return { success: true };
+});
+
+ipcMain.handle('get-wanx-config', async () => {
+  const config = getWanXConfig();
+  return { success: true, hasApiKey: !!config.apiKey };
+});
+
+// 图生图
+ipcMain.handle('wanx-generate-image', async (
+  _event: Electron.IpcMainInvokeEvent,
+  originalAssetId: number,
+  imagePath: string,
+  prompt?: string
+) => {
+  try {
+    const task = await generateImage(imagePath, prompt);
+    return { success: true, task_id: task.task_id, original_asset_id: originalAssetId };
+  } catch (error: any) {
+    console.error('阿里万相图生图失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 图生视频
+ipcMain.handle('wanx-generate-video', async (
+  _event: Electron.IpcMainInvokeEvent,
+  originalAssetId: number,
+  parentGenerationId: number | null,
+  imagePath: string,
+  prompt?: string
+) => {
+  try {
+    const task = await generateVideo(imagePath, prompt);
+    return { success: true, task_id: task.task_id, original_asset_id: originalAssetId, parent_generation_id: parentGenerationId };
+  } catch (error: any) {
+    console.error('阿里万相图生视频失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 查询任务状态
+ipcMain.handle('wanx-get-task-status', async (
+  _event: Electron.IpcMainInvokeEvent,
+  taskId: string
+) => {
+  try {
+    const result = await getTaskStatus(taskId);
+    return { success: true, ...result };
+  } catch (error: any) {
+    console.error('查询任务状态失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 等待任务完成并保存到本地
+ipcMain.handle('wanx-complete-task', async (
+  _event: Electron.IpcMainInvokeEvent,
+  taskId: string,
+  originalAssetId: number,
+  parentGenerationId: number | null,
+  generationType: GenerationType,
+  prompt?: string
+) => {
+  try {
+    const result = await waitForTaskCompletion(taskId);
+    
+    // 保存文件到本地
+    const stat = fs.statSync(getAppDataDir());
+    const dateDir = path.join(getAppDataDir(), 'ai_generations');
+    if (!fs.existsSync(dateDir)) {
+      fs.mkdirSync(dateDir, { recursive: true });
+    }
+
+    const ext = generationType === 'video' ? '.mp4' : '.png';
+    const fileName = `${Date.now()}${ext}`;
+    const destPath = path.join(dateDir, fileName);
+    await downloadToFile(result.url, destPath);
+
+    // 生成缩略图
+    let thumbnailPath: string | null = null;
+    try {
+      const thumbDir = path.join(getAppDataDir(), 'ai_thumbnails');
+      if (!fs.existsSync(thumbDir)) {
+        fs.mkdirSync(thumbDir, { recursive: true });
+      }
+      const thumbExt = '.jpg';
+      const thumbDestPath = path.join(thumbDir, `${Date.now()}${thumbExt}`);
+      
+      if (generationType === 'video') {
+        // 视频缩略图需要 ffmpeg，这里简单跳过或后续完善
+      } else {
+        await sharp(destPath)
+          .resize(300, null, { withoutEnlargement: true })
+          .toFile(thumbDestPath);
+        thumbnailPath = thumbDestPath;
+      }
+    } catch (thumbErr) {
+      console.error('缩略图生成失败:', thumbErr);
+    }
+
+    // 保存到数据库
+    const generationData = {
+      file_path: destPath,
+      file_name: fileName,
+      file_size: fs.statSync(destPath).size,
+      thumbnail_path: thumbnailPath,
+      original_asset_id: originalAssetId,
+      parent_generation_id: parentGenerationId,
+      generation_type: generationType,
+      prompt: prompt || null
+    };
+
+    const genId = insertAiGeneration(generationData);
+    return { success: true, generation: { ...generationData, id: genId, created_at: new Date().toISOString() } };
+  } catch (error: any) {
+    console.error('任务完成失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// AI 图片旋转功能
 ipcMain.handle('save-rotated-image', async (_event: Electron.IpcMainInvokeEvent, filePath: string, rotation: number) => {
   try {
-    // 验证文件是否存在
     if (!fs.existsSync(filePath)) {
       return { success: false, error: '文件不存在' };
     }
 
-    // 使用 sharp 旋转图片
     await sharp(filePath)
       .rotate(rotation)
       .toFile(filePath);

@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { Asset, Tag } from '../src/types';
+import { Asset, Tag, AiGeneration, GenerationType } from '../src/types';
 
 // 获取用户文档目录
 const DOCUMENTS_DIR = path.join(os.homedir(), 'Documents');
@@ -45,8 +45,26 @@ export function initDatabase() {
       FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
     );
 
+    -- AI 生成内容表
+    CREATE TABLE IF NOT EXISTS ai_generations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      original_asset_id INTEGER NOT NULL,
+      parent_generation_id INTEGER,
+      generation_type TEXT NOT NULL CHECK(generation_type IN ('colored', 'adapted', 'other')),
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_size INTEGER NOT NULL,
+      thumbnail_path TEXT,
+      prompt TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (original_asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+      FOREIGN KEY (parent_generation_id) REFERENCES ai_generations(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_assets_created_at ON assets(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(tag_name);
+    CREATE INDEX IF NOT EXISTS idx_ai_generations_asset_id ON ai_generations(original_asset_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_generations_parent_id ON ai_generations(parent_generation_id);
   `);
 
   return db;
@@ -179,10 +197,9 @@ export function getAssetsByTags(tagIds: number[]): Asset[] {
 
 /**
  * 搜索素材（按文件名、标签和描述搜索）
- * @param searchQuery 搜索关键词
  */
-export function searchAssets(searchQuery: string): Asset[] {
-  const normalizedQuery = searchQuery.toLowerCase();
+export function searchAssets(query: string): Asset[] {
+  const normalizedQuery = query.toLowerCase();
   const stmt = db.prepare(`
     SELECT DISTINCT a.*, GROUP_CONCAT(t.id || ':' || t.tag_name) as tags_str
     FROM assets a
@@ -224,10 +241,104 @@ export function getAssetsByType(fileType: 'image' | 'video' | 'audio'): Asset[] 
 
 /**
  * 检查文件是否已存在于数据库中
- * @param filePath 文件路径
  */
 export function checkAssetExists(filePath: string): boolean {
   const stmt = db.prepare('SELECT id FROM assets WHERE file_path = ?');
   const result = stmt.get(filePath);
   return !!result;
+}
+
+// ==================== AI 生成相关功能 ====================
+
+/**
+ * 插入 AI 生成内容
+ */
+export function insertAiGeneration(generation: Omit<AiGeneration, 'id' | 'created_at'>): number {
+  const stmt = db.prepare(`
+    INSERT INTO ai_generations (original_asset_id, parent_generation_id, generation_type, file_path, file_name, file_size, thumbnail_path, prompt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const result = stmt.run(
+    generation.original_asset_id,
+    generation.parent_generation_id,
+    generation.generation_type,
+    generation.file_path,
+    generation.file_name,
+    generation.file_size,
+    generation.thumbnail_path || null,
+    generation.prompt || null
+  );
+  return result.lastInsertRowid as number;
+}
+
+/**
+ * 获取单个原始素材的所有 AI 生成内容
+ */
+export function getAiGenerationsByAssetId(assetId: number): AiGeneration[] {
+  const stmt = db.prepare(`
+    SELECT * FROM ai_generations
+    WHERE original_asset_id = ?
+    ORDER BY created_at DESC
+  `);
+  return stmt.all(assetId) as AiGeneration[];
+}
+
+/**
+ * 获取 AI 生成内容及其关联链（包含原始素材信息）
+ */
+export function getAiGenerationChain(generationId: number): {
+  generation: AiGeneration;
+  originalAsset: Asset;
+  parentGeneration?: AiGeneration;
+  childGenerations: AiGeneration[];
+} | null {
+  const generationStmt = db.prepare('SELECT * FROM ai_generations WHERE id = ?');
+  const generation = generationStmt.get(generationId) as AiGeneration | undefined;
+
+  if (!generation) {
+    return null;
+  }
+
+  // 获取原始素材（带标签）
+  const assetStmt = db.prepare(`
+    SELECT a.*, GROUP_CONCAT(t.id || ':' || t.tag_name) as tags_str
+    FROM assets a
+    LEFT JOIN asset_tags at ON a.id = at.asset_id
+    LEFT JOIN tags t ON at.tag_id = t.id
+    WHERE a.id = ?
+    GROUP BY a.id
+  `);
+  const assetRow = assetStmt.get(generation.original_asset_id) as any;
+  const originalAsset = {
+    ...assetRow,
+    tags: assetRow.tags_str ? assetRow.tags_str.split(',').map((t: string) => {
+      const [id, tag_name] = t.split(':');
+      return { id: parseInt(id), tag_name };
+    }) : []
+  };
+
+  // 获取父版本（如果有）
+  let parentGeneration: AiGeneration | undefined;
+  if (generation.parent_generation_id) {
+    parentGeneration = generationStmt.get(generation.parent_generation_id) as AiGeneration | undefined;
+  }
+
+  // 获取子版本
+  const childStmt = db.prepare('SELECT * FROM ai_generations WHERE parent_generation_id = ? ORDER BY created_at');
+  const childGenerations = childStmt.all(generationId) as AiGeneration[];
+
+  return {
+    generation,
+    originalAsset,
+    parentGeneration,
+    childGenerations
+  };
+}
+
+/**
+ * 删除某个 AI 生成内容
+ */
+export function deleteAiGeneration(generationId: number) {
+  const stmt = db.prepare('DELETE FROM ai_generations WHERE id = ?');
+  stmt.run(generationId);
 }

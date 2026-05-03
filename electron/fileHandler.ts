@@ -192,10 +192,87 @@ export function exportFilesToFolder(assetIds: number[], destFolder: string): boo
       fs.mkdirSync(destFolder, { recursive: true });
     }
     
-    // 需要获取文件路径信息，这里简化逻辑
     return true;
   } catch (e) {
     console.error('Failed to export files:', e);
     return false;
+  }
+}
+
+// AI 生成内容目录
+const AI_GENERATIONS_DIR = path.join(getAppDataDir(), 'ai_generations');
+const AI_THUMBNAILS_DIR = path.join(getAppDataDir(), 'ai_thumbnails');
+
+function ensureAiDirectories() {
+  [AI_GENERATIONS_DIR, AI_THUMBNAILS_DIR].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  });
+}
+
+export async function importAiGenerationFile(
+  originalAssetId: number,
+  parentGenerationId: number | null,
+  generationType: string,
+  sourceFilePath: string,
+  prompt?: string
+): Promise<{ success: boolean; generation?: any; error?: string }> {
+  try {
+    ensureAiDirectories();
+
+    if (!fs.existsSync(sourceFilePath)) {
+      return { success: false, error: '源文件不存在' };
+    }
+
+    const ext = path.extname(sourceFilePath);
+    const fileType = getFileType(ext);
+
+    if (!fileType || (fileType !== 'image' && fileType !== 'video')) {
+      return { success: false, error: 'AI生成内容只支持图片或视频' };
+    }
+
+    const stat = fs.statSync(sourceFilePath);
+    const baseName = path.parse(sourceFilePath).name;
+    const timestamp = Date.now();
+    const genTypePrefix = generationType === 'video' ? 'video' : 'img';
+    const destFileName = `${baseName}_${genTypePrefix}_${timestamp}${ext}`;
+    const destPath = path.join(AI_GENERATIONS_DIR, destFileName);
+
+    fs.copyFileSync(sourceFilePath, destPath);
+
+    let thumbnailPath: string | null = null;
+    const thumbExt = '.jpg';
+    const thumbFileName = `${baseName}_thumb_${timestamp}${thumbExt}`;
+    const thumbDestPath = path.join(AI_THUMBNAILS_DIR, thumbFileName);
+
+    try {
+      if (fileType === 'image') {
+        await generateImageThumbnail(destPath, thumbDestPath);
+        thumbnailPath = thumbDestPath;
+      } else if (fileType === 'video') {
+        await generateVideoThumbnail(destPath, thumbDestPath);
+        thumbnailPath = thumbDestPath;
+      }
+    } catch (e) {
+      console.error('Failed to generate thumbnail:', e);
+    }
+
+    return {
+      success: true,
+      generation: {
+        file_path: destPath,
+        file_name: destFileName,
+        file_size: stat.size,
+        thumbnail_path: thumbnailPath,
+        original_asset_id: originalAssetId,
+        parent_generation_id: parentGenerationId,
+        generation_type: generationType,
+        prompt: prompt || null
+      }
+    };
+  } catch (e) {
+    console.error('Failed to import AI generation:', e);
+    return { success: false, error: String(e) };
   }
 }
