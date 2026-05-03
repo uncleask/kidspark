@@ -174,7 +174,8 @@ export function getAssetsByTag(tagId: number): Asset[] {
       EXISTS(SELECT 1 FROM ai_generations ag WHERE ag.original_asset_id = a.id AND ag.generation_type = 'video' AND ag.is_deleted = 0) as has_video
     FROM assets a
     INNER JOIN asset_tags at ON a.id = at.asset_id
-    INNER JOIN tags t ON at.tag_id = t.id
+    LEFT JOIN asset_tags at2 ON a.id = at2.asset_id
+    LEFT JOIN tags t ON at2.tag_id = t.id
     WHERE at.tag_id = ?
     GROUP BY a.id
     ORDER BY a.created_at DESC
@@ -226,11 +227,56 @@ export function searchTags(query: string): Tag[] {
 }
 
 export function deleteTag(tagId: number) {
+  // 先删除关联记录
+  const deleteLinksStmt = db.prepare('DELETE FROM asset_tags WHERE tag_id = ?');
+  deleteLinksStmt.run(tagId);
+  // 再删除标签本身
   const stmt = db.prepare('DELETE FROM tags WHERE id = ?');
   stmt.run(tagId);
 }
 
 export function deleteAsset(assetId: number) {
+  // 先获取素材信息，用于删除物理文件
+  const assetStmt = db.prepare('SELECT file_path, thumbnail_path FROM assets WHERE id = ?');
+  const asset = assetStmt.get(assetId) as { file_path: string; thumbnail_path: string | null } | undefined;
+
+  // 获取关联的 AI 生成记录，用于删除物理文件
+  const generationsStmt = db.prepare('SELECT file_path, thumbnail_path FROM ai_generations WHERE original_asset_id = ?');
+  const generations = generationsStmt.all(assetId) as { file_path: string; thumbnail_path: string | null }[];
+
+  // 删除 AI 生成记录的物理文件
+  for (const gen of generations) {
+    try {
+      if (fs.existsSync(gen.file_path)) {
+        fs.unlinkSync(gen.file_path);
+      }
+      if (gen.thumbnail_path && fs.existsSync(gen.thumbnail_path)) {
+        fs.unlinkSync(gen.thumbnail_path);
+      }
+    } catch (e) {
+      console.error('Failed to delete generation file:', e);
+    }
+  }
+
+  // 删除素材的物理文件
+  if (asset) {
+    try {
+      if (fs.existsSync(asset.file_path)) {
+        fs.unlinkSync(asset.file_path);
+      }
+      if (asset.thumbnail_path && fs.existsSync(asset.thumbnail_path)) {
+        fs.unlinkSync(asset.thumbnail_path);
+      }
+    } catch (e) {
+      console.error('Failed to delete asset file:', e);
+    }
+  }
+
+  // 删除数据库记录
+  const deleteGenerationsStmt = db.prepare('DELETE FROM ai_generations WHERE original_asset_id = ?');
+  deleteGenerationsStmt.run(assetId);
+  const deleteTagsStmt = db.prepare('DELETE FROM asset_tags WHERE asset_id = ?');
+  deleteTagsStmt.run(assetId);
   const stmt = db.prepare('DELETE FROM assets WHERE id = ?');
   stmt.run(assetId);
 }
@@ -240,22 +286,38 @@ export function updateAssetDescription(assetId: number, description: string) {
   stmt.run(description, assetId);
 }
 
+export function updateAssetThumbnail(assetId: number, thumbnailPath: string | null) {
+  const stmt = db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?');
+  stmt.run(thumbnailPath, assetId);
+}
+
+export function updateAiGenerationThumbnail(generationId: number, thumbnailPath: string | null) {
+  const stmt = db.prepare('UPDATE ai_generations SET thumbnail_path = ? WHERE id = ?');
+  stmt.run(thumbnailPath, generationId);
+}
+
 export function getAssetsByTags(tagIds: number[]): Asset[] {
   if (tagIds.length === 0) {
     return getAllAssets();
   }
 
   const placeholders = tagIds.map(() => '?').join(',');
+  // 使用子查询确保只统计 asset_tags 中的标签数量
   const stmt = db.prepare(`
-    SELECT a.*, GROUP_CONCAT(t.id || ':' || t.tag_name) as tags_str,
+    SELECT a.*, GROUP_CONCAT(DISTINCT t.id || ':' || t.tag_name) as tags_str,
       EXISTS(SELECT 1 FROM ai_generations ag WHERE ag.original_asset_id = a.id AND ag.generation_type IN ('colored', 'adapted') AND ag.is_deleted = 0) as has_colored,
       EXISTS(SELECT 1 FROM ai_generations ag WHERE ag.original_asset_id = a.id AND ag.generation_type = 'video' AND ag.is_deleted = 0) as has_video
     FROM assets a
-    INNER JOIN asset_tags at ON a.id = at.asset_id
-    INNER JOIN tags t ON at.tag_id = t.id
-    WHERE at.tag_id IN (${placeholders})
+    INNER JOIN (
+      SELECT asset_id
+      FROM asset_tags
+      WHERE tag_id IN (${placeholders})
+      GROUP BY asset_id
+      HAVING COUNT(DISTINCT tag_id) = ${tagIds.length}
+    ) matched ON a.id = matched.asset_id
+    LEFT JOIN asset_tags at ON a.id = at.asset_id
+    LEFT JOIN tags t ON at.tag_id = t.id
     GROUP BY a.id
-    HAVING COUNT(DISTINCT at.tag_id) = ${tagIds.length}
     ORDER BY a.created_at DESC
   `);
   const rows = stmt.all(...tagIds) as any[];
@@ -328,6 +390,12 @@ export function getAssetsByType(fileType: 'image' | 'video' | 'audio'): Asset[] 
 export function checkAssetExists(filePath: string): boolean {
   const stmt = db.prepare('SELECT id FROM assets WHERE file_path = ?');
   const result = stmt.get(filePath);
+  return !!result;
+}
+
+export function checkAssetExistsByName(fileName: string): boolean {
+  const stmt = db.prepare('SELECT id FROM assets WHERE file_name = ?');
+  const result = stmt.get(fileName);
   return !!result;
 }
 

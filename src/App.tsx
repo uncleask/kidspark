@@ -131,15 +131,25 @@ const App: React.FC = () => {
 
   const handleDeleteTag = async (tagId: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await window.electronAPI.deleteTag(tagId);
-      message.success('标签已删除');
-      setSelectedTagIds(prev => prev.filter(id => id !== tagId));
-      fetchTags();
-    } catch (error) {
-      console.error('Failed to delete tag:', error);
-      message.error('删除标签失败');
-    }
+    Modal.confirm({
+      title: '确认删除标签',
+      content: '删除标签将同时移除该标签与所有素材的关联，是否继续？',
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await window.electronAPI.deleteTag(tagId);
+          message.success('标签已删除');
+          setSelectedTagIds(prev => prev.filter(id => id !== tagId));
+          fetchTags();
+          fetchAssets(selectedTagIds.filter(id => id !== tagId), searchQuery, selectedType);
+        } catch (error) {
+          console.error('Failed to delete tag:', error);
+          message.error('删除标签失败');
+        }
+      }
+    });
   };
 
   const handleTagUpdated = () => {
@@ -162,6 +172,31 @@ const App: React.FC = () => {
       console.error('Failed to delete asset:', error);
       message.error('删除素材失败');
     }
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedAssetIds.length === 0) return;
+    Modal.confirm({
+      title: '确认删除素材',
+      content: `确定要删除选中的 ${selectedAssetIds.length} 个素材吗？删除后将同时清理系统中的关联记录（包括 AI 生成版本和标签关联）。`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          for (const assetId of selectedAssetIds) {
+            await window.electronAPI.deleteAsset(assetId);
+          }
+          message.success(`已删除 ${selectedAssetIds.length} 个素材`);
+          setSelectedAssetIds([]);
+          fetchAssets(selectedTagIds, searchQuery);
+          fetchTags();
+        } catch (error) {
+          console.error('Failed to batch delete assets:', error);
+          message.error('批量删除失败');
+        }
+      }
+    });
   };
 
   const handleClosePreview = () => {
@@ -283,6 +318,13 @@ const App: React.FC = () => {
                 onClick={() => setIsExportModalOpen(true)}
               >
                 导出供 AI 使用 ({selectedAssetIds.length})
+              </Button>
+              <Button
+                danger
+                icon={<DeleteOutlined />}
+                onClick={handleBatchDelete}
+              >
+                删除选中 ({selectedAssetIds.length})
               </Button>
               <Button danger onClick={() => setSelectedAssetIds([])}>
                 取消选择

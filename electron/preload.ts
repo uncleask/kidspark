@@ -21,8 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportCopyPaths: (assetIds: number[]) => ipcRenderer.invoke('export-copy-paths', assetIds) as Promise<{ success: boolean; count?: number; error?: string }>,
   exportToFolder: (assetIds: number[]) => ipcRenderer.invoke('export-to-folder', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; error?: string }>,
   exportJsonMetadata: (assetIds: number[]) => ipcRenderer.invoke('export-json-metadata', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>,
-  saveRotatedImage: (filePath: string, rotation: number) =>
-    ipcRenderer.invoke('save-rotated-image', filePath, rotation) as Promise<{ success: boolean; error?: string }>,
+  saveRotatedImage: (filePath: string, rotation: number, assetId?: number, generationId?: number) =>
+    ipcRenderer.invoke('save-rotated-image', filePath, rotation, assetId, generationId) as Promise<{ success: boolean; error?: string }>,
 
   // AI 生成相关
   saveAiGeneration: (generation: Omit<AiGeneration, 'id' | 'created_at'>) =>
@@ -61,7 +61,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     parentGenerationId: number | null,
     generationType: string,
     prompt?: string
-  ) => ipcRenderer.invoke('wanx-complete-task', taskId, originalAssetId, parentGenerationId, generationType, prompt) as Promise<{ success: boolean; generation?: AiGeneration; error?: string }>
+  ) => ipcRenderer.invoke('wanx-complete-task', taskId, originalAssetId, parentGenerationId, generationType, prompt) as Promise<{ success: boolean; generation?: AiGeneration; error?: string }>,
+  getAppDataDir: () => ipcRenderer.invoke('get-app-data-dir') as Promise<string>
 });
 
 declare global {
@@ -83,7 +84,7 @@ declare global {
       exportCopyPaths: (assetIds: number[]) => Promise<{ success: boolean; count?: number; error?: string }>;
       exportToFolder: (assetIds: number[]) => Promise<{ success: boolean; canceled?: boolean; count?: number; error?: string }>;
       exportJsonMetadata: (assetIds: number[]) => Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>;
-      saveRotatedImage: (filePath: string, rotation: number) => Promise<{ success: boolean; error?: string }>;
+      saveRotatedImage: (filePath: string, rotation: number, assetId?: number, generationId?: number) => Promise<{ success: boolean; error?: string }>;
 
       saveAiGeneration: (generation: Omit<AiGeneration, 'id' | 'created_at'>) => Promise<{ success: boolean; id: number }>;
       getAiGenerationsByAsset: (assetId: number) => Promise<AiGeneration[]>;
@@ -114,6 +115,7 @@ declare global {
         generationType: string,
         prompt?: string
       ) => Promise<{ success: boolean; generation?: AiGeneration; error?: string }>,
+      getAppDataDir: () => Promise<string>,
     };
   }
 }

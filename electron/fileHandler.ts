@@ -14,7 +14,7 @@ try {
 } catch (error) {
   console.warn('ffmpeg-static module not available, video thumbnail generation will be skipped:', error);
 }
-import { insertAsset, checkAssetExists, getAppDataDir } from './database';
+import { insertAsset, checkAssetExists, checkAssetExistsByName, getAppDataDir } from './database';
 
 const execFilePromise = promisify(execFile);
 
@@ -65,10 +65,11 @@ async function generateVideoThumbnail(inputPath: string, outputPath: string) {
 async function importSingleFile(filePath: string): Promise<number | null> {
   ensureDirectories();
 
-  // 首先检查文件是否已存在于数据库中
-  const destPath = path.join(ORIGINALS_DIR, path.basename(filePath)); // 简化路径，先不按日期
-  if (checkAssetExists(filePath) || checkAssetExists(destPath)) {
-    console.log(`File already exists: ${filePath}`);
+  const fileName = path.basename(filePath);
+
+  // 检查文件是否已存在（按文件名判断，避免不同目录重复导入）
+  if (checkAssetExistsByName(fileName)) {
+    console.log(`File already exists by name: ${fileName}`);
     return null;
   }
 
@@ -90,7 +91,6 @@ async function importSingleFile(filePath: string): Promise<number | null> {
     fs.mkdirSync(dateDir, { recursive: true });
   }
 
-  const fileName = path.basename(filePath);
   let destFileName = fileName;
   let finalDestPath = path.join(dateDir, destFileName);
   let counter = 1;
@@ -132,7 +132,7 @@ async function importSingleFile(filePath: string): Promise<number | null> {
   return assetId;
 }
 
-function walkDirectory(dir: string): string[] {
+function walkDirectory(dir: string, recursive: boolean = true): string[] {
   const files: string[] = [];
   const items = fs.readdirSync(dir);
 
@@ -141,7 +141,9 @@ function walkDirectory(dir: string): string[] {
     const stat = fs.statSync(fullPath);
 
     if (stat.isDirectory()) {
-      files.push(...walkDirectory(fullPath));
+      if (recursive) {
+        files.push(...walkDirectory(fullPath, recursive));
+      }
     } else {
       files.push(fullPath);
     }
@@ -150,7 +152,7 @@ function walkDirectory(dir: string): string[] {
   return files;
 }
 
-export async function importFiles(filePaths: string[]): Promise<number[]> {
+export async function importFiles(filePaths: string[], recursive: boolean = false): Promise<number[]> {
   const importedIds: number[] = [];
 
   for (const filePath of filePaths) {
@@ -158,7 +160,7 @@ export async function importFiles(filePaths: string[]): Promise<number[]> {
       const stat = fs.statSync(filePath);
 
       if (stat.isDirectory()) {
-        const files = walkDirectory(filePath);
+        const files = walkDirectory(filePath, recursive);
         for (const file of files) {
           try {
             const id = await importSingleFile(file);

@@ -16,6 +16,8 @@ import {
   deleteAsset,
   searchAssets,
   updateAssetDescription,
+  updateAssetThumbnail,
+  updateAiGenerationThumbnail,
   insertAiGeneration,
   getAiGenerationsByAssetId,
   getAiGenerationChain,
@@ -101,6 +103,10 @@ ipcMain.handle('import-files', async () => {
 
 ipcMain.handle('get-all-assets', () => {
   return getAllAssets();
+});
+
+ipcMain.handle('get-app-data-dir', () => {
+  return getAppDataDir();
 });
 
 ipcMain.handle('get-assets-by-tag', (_event: Electron.IpcMainInvokeEvent, tagId: number) => {
@@ -361,7 +367,7 @@ ipcMain.handle('wanx-complete-task', async (
 });
 
 // AI 图片旋转功能
-ipcMain.handle('save-rotated-image', async (_event: Electron.IpcMainInvokeEvent, filePath: string, rotation: number) => {
+ipcMain.handle('save-rotated-image', async (_event: Electron.IpcMainInvokeEvent, filePath: string, rotation: number, assetId?: number, generationId?: number) => {
   try {
     if (!fs.existsSync(filePath)) {
       return { success: false, error: '文件不存在' };
@@ -376,6 +382,29 @@ ipcMain.handle('save-rotated-image', async (_event: Electron.IpcMainInvokeEvent,
 
     fs.copyFileSync(tempPath, filePath);
     fs.unlinkSync(tempPath);
+
+    // 重新生成缩略图
+    const thumbDir = path.join(getAppDataDir(), 'thumbnails');
+    const baseName = path.parse(filePath).name;
+    const thumbPath = path.join(thumbDir, `${baseName}.jpg`);
+    
+    try {
+      if (!fs.existsSync(thumbDir)) {
+        fs.mkdirSync(thumbDir, { recursive: true });
+      }
+      await sharp(filePath)
+        .resize(300, null, { withoutEnlargement: true })
+        .toFile(thumbPath);
+      
+      // 更新数据库中的缩略图路径
+      if (assetId) {
+        updateAssetThumbnail(assetId, thumbPath);
+      } else if (generationId) {
+        updateAiGenerationThumbnail(generationId, thumbPath);
+      }
+    } catch (thumbErr) {
+      console.error('缩略图重新生成失败:', thumbErr);
+    }
 
     return { success: true };
   } catch (e) {

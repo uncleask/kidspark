@@ -1,7 +1,7 @@
 {
   "name": "KidSpark",
   "version": "1.0.0",
-  "description": "AI 驱动的家庭素材库",
+  "description": "AI 驱动的童创素材库",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "vite",

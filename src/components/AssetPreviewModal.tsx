@@ -58,6 +58,8 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [isSavingDescription, setIsSavingDescription] = useState(false);
   const [imgRefreshKey, setImgRefreshKey] = useState(0);
+  const [editDescriptionBackup, setEditDescriptionBackup] = useState('');
+  const [editPromptBackup, setEditPromptBackup] = useState('');
 
   const [generations, setGenerations] = useState<AiGeneration[]>([]);
   const [currentView, setCurrentView] = useState<ViewItem | null>(null);
@@ -362,7 +364,9 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
 
     setIsSaving(true);
     try {
-      const result = await window.electronAPI.saveRotatedImage(filePath, rotation);
+      const assetId = currentView.type === 'original' ? currentView.data.id : undefined;
+      const generationId = currentView.type === 'generation' ? currentView.data.id : undefined;
+      const result = await window.electronAPI.saveRotatedImage(filePath, rotation, assetId, generationId);
       if (result.success) {
         message.success('图片已保存并覆盖原图');
         setRotation(0);
@@ -398,6 +402,12 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     } finally {
       setIsSavingDescription(false);
     }
+  };
+
+  const handleCancelEdit = () => {
+    setCurrentDescription(editDescriptionBackup);
+    setCurrentPrompt(editPromptBackup);
+    setIsEditingDescription(false);
   };
 
   const handleAddTag = async () => {
@@ -553,11 +563,13 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
               {asset.file_name}
             </div>
             {asset.thumbnail_path && (
-              <img 
-                src={`file://${asset.thumbnail_path}`} 
-                alt="thumb" 
-                style={{ width: '100%', height: '60px', objectFit: 'cover', borderRadius: '4px', marginTop: '6px' }} 
-              />
+              <div style={{ width: '100%', aspectRatio: '16/9', marginTop: '6px', borderRadius: '4px', overflow: 'hidden' }}>
+                <img 
+                  src={`file://${asset.thumbnail_path}`} 
+                  alt="thumb" 
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                />
+              </div>
             )}
           </div>
         )}
@@ -590,14 +602,16 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                   {gen.file_name}
                 </div>
                 {gen.thumbnail_path && gen.generation_type !== 'video' && (
-                  <img 
-                    src={`file://${gen.thumbnail_path}`} 
-                    alt="thumb" 
-                    style={{ width: '100%', height: '60px', objectFit: 'cover', borderRadius: '4px', marginTop: '6px' }} 
-                  />
+                  <div style={{ width: '100%', aspectRatio: '16/9', marginTop: '6px', borderRadius: '4px', overflow: 'hidden' }}>
+                    <img 
+                      src={`file://${gen.thumbnail_path}`} 
+                      alt="thumb" 
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                    />
+                  </div>
                 )}
                 {gen.generation_type === 'video' && (
-                  <div style={{ width: '100%', height: '60px', background: '#001529', borderRadius: '4px', marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+                  <div style={{ width: '100%', aspectRatio: '16/9', background: '#001529', borderRadius: '4px', marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', overflow: 'hidden' }}>
                     <VideoCameraOutlined style={{ fontSize: '24px' }} />
                   </div>
                 )}
@@ -766,7 +780,11 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           {/* 描述区域 */}
           <Card title="描述与提示词" style={{ marginTop: '16px' }} size="small">
             {!isEditingDescription ? (
-              <div onClick={() => setIsEditingDescription(true)} style={{ cursor: 'pointer', minHeight: '40px' }}>
+              <div onClick={() => {
+                setEditDescriptionBackup(currentDescription);
+                setEditPromptBackup(currentPrompt);
+                setIsEditingDescription(true);
+              }} style={{ cursor: 'pointer', minHeight: '40px' }}>
                 {currentDescription || currentPrompt ? (
                   <div>
                     {currentDescription && <div style={{ marginBottom: '8px' }}><AntTag color="blue">描述</AntTag> {currentDescription}</div>}
@@ -792,7 +810,10 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                   onChange={(e) => setCurrentPrompt(e.target.value)} 
                   rows={2} 
                 />
-                <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveDescription} loading={isSavingDescription} size="small">保存</Button>
+                <Space>
+                  <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveDescription} loading={isSavingDescription} size="small">保存</Button>
+                  <Button icon={<CloseCircleOutlined />} onClick={handleCancelEdit} size="small">取消</Button>
+                </Space>
               </Space>
             )}
           </Card>
