@@ -9,6 +9,8 @@ export interface Asset {
   created_at: string;
   updated_at: string;
   tags?: Tag[];
+  has_colored?: boolean;
+  has_video?: boolean;
 }
 
 export interface Tag {
@@ -36,5 +38,7 @@ export interface AiGeneration {
   file_size: number;
   thumbnail_path?: string | null;
   prompt?: string | null;
+  is_deleted?: number;
+  is_main?: number;
   created_at: string;
 }

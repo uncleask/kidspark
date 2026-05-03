@@ -54,3 +54,10 @@ Desktop.ini
 *.temp
 .cache/
 
+# release
+release/
+release-v*/
+
+# docs
+docs_prompt/
+

@@ -31,8 +31,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('get-ai-generations-by-asset', assetId) as Promise<AiGeneration[]>,
   getAiGenerationChain: (generationId: number) =>
     ipcRenderer.invoke('get-ai-generation-chain', generationId) as Promise<any>,
+  getMainGenerationChain: (assetId: number, targetGenerationId?: number) =>
+    ipcRenderer.invoke('get-main-generation-chain', assetId, targetGenerationId) as Promise<{ originalAsset: any; chain: any[] } | null>,
+  getChildGenerations: (generationId: number) =>
+    ipcRenderer.invoke('get-child-generations', generationId) as Promise<any[]>,
   deleteAiGeneration: (generationId: number) =>
     ipcRenderer.invoke('delete-ai-generation', generationId) as Promise<{ success: boolean }>,
+  setMainGeneration: (generationId: number, originalAssetId: number) =>
+    ipcRenderer.invoke('set-main-generation', generationId, originalAssetId) as Promise<{ success: boolean }>,
+  unsetMainGeneration: (generationId: number) =>
+    ipcRenderer.invoke('unset-main-generation', generationId) as Promise<{ success: boolean }>,
   importAiGeneration: (
     originalAssetId: number,
     parentGenerationId: number | null,
@@ -80,7 +88,11 @@ declare global {
       saveAiGeneration: (generation: Omit<AiGeneration, 'id' | 'created_at'>) => Promise<{ success: boolean; id: number }>;
       getAiGenerationsByAsset: (assetId: number) => Promise<AiGeneration[]>;
       getAiGenerationChain: (generationId: number) => Promise<any>;
+      getMainGenerationChain: (assetId: number, targetGenerationId?: number) => Promise<{ originalAsset: any; chain: any[] } | null>;
+      getChildGenerations: (generationId: number) => Promise<any[]>;
       deleteAiGeneration: (generationId: number) => Promise<{ success: boolean }>,
+      setMainGeneration: (generationId: number, originalAssetId: number) => Promise<{ success: boolean }>,
+      unsetMainGeneration: (generationId: number) => Promise<{ success: boolean }>,
       importAiGeneration: (
         originalAssetId: number,
         parentGenerationId: number | null,

@@ -5,7 +5,10 @@ import {
   AudioOutlined,
   FileImageOutlined,
   PlusOutlined,
-  PlayCircleOutlined
+  PlayCircleOutlined,
+  PictureOutlined,
+  ExperimentOutlined,
+  FileImageFilled
 } from '@ant-design/icons';
 import { Asset } from '../types';
 
@@ -131,6 +134,25 @@ const AssetCard: React.FC<AssetCardProps> = ({ asset, onTagUpdated, onClick, isS
             </>
           ) : (
             <div style={{ fontSize: 48, color: '#999' }}>{getFileIcon()}</div>
+          )}
+          {/* AI 生成状态符号 */}
+          {(asset.has_colored || asset.has_video) && (
+            <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 10, display: 'flex', gap: '4px' }}>
+              {asset.has_colored && (
+                <Tooltip title="已有AI彩色图">
+                  <div style={{ background: '#52c41a', borderRadius: '50%', width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 12 }}>
+                    <FileImageFilled />
+                  </div>
+                </Tooltip>
+              )}
+              {asset.has_video && (
+                <Tooltip title="已有AI视频">
+                  <div style={{ background: '#1890ff', borderRadius: '50%', width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 12 }}>
+                    <VideoCameraOutlined />
+                  </div>
+                </Tooltip>
+              )}
+            </div>
           )}
         </div>
       }

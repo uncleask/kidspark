@@ -19,7 +19,11 @@ import {
   insertAiGeneration,
   getAiGenerationsByAssetId,
   getAiGenerationChain,
+  getMainGenerationChain,
+  getChildGenerations,
   deleteAiGeneration,
+  setMainGeneration,
+  unsetMainGeneration,
   getAppDataDir
 } from './database';
 import { importFiles } from './fileHandler';
@@ -55,7 +59,7 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     // 生产模式下，dist 目录在 app 目录下
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
 
   mainWindow.on('closed', () => {
@@ -163,8 +167,26 @@ ipcMain.handle('get-ai-generation-chain', (_event: Electron.IpcMainInvokeEvent, 
   return getAiGenerationChain(generationId);
 });
 
+ipcMain.handle('get-main-generation-chain', (_event: Electron.IpcMainInvokeEvent, assetId: number, targetGenerationId?: number) => {
+  return getMainGenerationChain(assetId, targetGenerationId);
+});
+
+ipcMain.handle('get-child-generations', (_event: Electron.IpcMainInvokeEvent, generationId: number) => {
+  return getChildGenerations(generationId);
+});
+
 ipcMain.handle('delete-ai-generation', (_event: Electron.IpcMainInvokeEvent, generationId: number) => {
   deleteAiGeneration(generationId);
+  return { success: true };
+});
+
+ipcMain.handle('set-main-generation', (_event: Electron.IpcMainInvokeEvent, generationId: number, originalAssetId: number) => {
+  setMainGeneration(generationId, originalAssetId);
+  return { success: true };
+});
+
+ipcMain.handle('unset-main-generation', (_event: Electron.IpcMainInvokeEvent, generationId: number) => {
+  unsetMainGeneration(generationId);
   return { success: true };
 });
 
@@ -345,9 +367,15 @@ ipcMain.handle('save-rotated-image', async (_event: Electron.IpcMainInvokeEvent,
       return { success: false, error: '文件不存在' };
     }
 
+    const ext = path.extname(filePath);
+    const tempPath = filePath.replace(ext, `_rotated_temp${ext}`);
+
     await sharp(filePath)
       .rotate(rotation)
-      .toFile(filePath);
+      .toFile(tempPath);
+
+    fs.copyFileSync(tempPath, filePath);
+    fs.unlinkSync(tempPath);
 
     return { success: true };
   } catch (e) {

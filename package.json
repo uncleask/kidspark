@@ -2,7 +2,7 @@
   "name": "KidSpark",
   "version": "1.0.0",
   "description": "AI 驱动的家庭素材库",
-  "main": "electron/main.js",
+  "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build && tsc --project tsconfig.electron.json",
@@ -21,8 +21,7 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*.js",
-      "!electron/**/*.ts",
+      "dist-electron/**/*",
       "package.json"
     ],
     "win": {
