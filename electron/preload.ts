@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAssetsByType: (fileType: 'image' | 'video' | 'audio') => ipcRenderer.invoke('get-assets-by-type', fileType) as Promise<Asset[]>,
   updateAssetDescription: (assetId: number, description: string) =>
     ipcRenderer.invoke('update-asset-description', assetId, description) as Promise<{ success: boolean }>,
+  updateAssetPrompt: (assetId: number, prompt: string) =>
+    ipcRenderer.invoke('update-asset-prompt', assetId, prompt) as Promise<{ success: boolean }>,
+  updateGenerationPrompt: (generationId: number, prompt: string) =>
+    ipcRenderer.invoke('update-generation-prompt', generationId, prompt) as Promise<{ success: boolean }>,
   exportCopyPaths: (assetIds: number[]) => ipcRenderer.invoke('export-copy-paths', assetIds) as Promise<{ success: boolean; count?: number; error?: string }>,
   exportToFolder: (assetIds: number[]) => ipcRenderer.invoke('export-to-folder', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; error?: string }>,
   exportJsonMetadata: (assetIds: number[]) => ipcRenderer.invoke('export-json-metadata', assetIds) as Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>,
@@ -47,21 +51,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     generationType: string,
     prompt?: string
   ) => ipcRenderer.invoke('import-ai-generation', originalAssetId, parentGenerationId, generationType, prompt) as Promise<{ success: boolean; id?: number; canceled?: boolean; error?: string; generation?: AiGeneration }>,
-  setWanXConfig: (apiKey: string) => ipcRenderer.invoke('set-wanx-config', apiKey) as Promise<{ success: boolean }>,
-  getWanXConfig: () => ipcRenderer.invoke('get-wanx-config') as Promise<{ success: boolean; hasApiKey: boolean }>,
-  wanxGenerateImage: (originalAssetId: number, imagePath: string, prompt?: string) => 
-    ipcRenderer.invoke('wanx-generate-image', originalAssetId, imagePath, prompt) as Promise<{ success: boolean; task_id?: string; error?: string }>,
-  wanxGenerateVideo: (originalAssetId: number, parentGenerationId: number | null, imagePath: string, prompt?: string) => 
-    ipcRenderer.invoke('wanx-generate-video', originalAssetId, parentGenerationId, imagePath, prompt) as Promise<{ success: boolean; task_id?: string; error?: string }>,
-  wanxGetTaskStatus: (taskId: string) => 
-    ipcRenderer.invoke('wanx-get-task-status', taskId) as Promise<{ success: boolean; status?: string; url?: string; error?: string }>,
+  // 模型配置
+  getAllModelConfigs: () => ipcRenderer.invoke('get-all-model-configs') as Promise<any[]>,
+  getModelConfigsByType: (modelType: 'image' | 'video') => ipcRenderer.invoke('get-model-configs-by-type', modelType) as Promise<any[]>,
+  getDefaultModelConfig: (modelType: 'image' | 'video') => ipcRenderer.invoke('get-default-model-config', modelType) as Promise<any | undefined>,
+  upsertModelConfig: (config: any) => ipcRenderer.invoke('upsert-model-config', config) as Promise<{ success: boolean; id: number }>,
+  deleteModelConfig: (modelId: string) => ipcRenderer.invoke('delete-model-config', modelId) as Promise<{ success: boolean }>,
+  setDefaultModel: (modelId: string, modelType: 'image' | 'video') => ipcRenderer.invoke('set-default-model', modelId, modelType) as Promise<{ success: boolean }>,
+
+  // AI 生成
+  wanxGenerateImage: (originalAssetId: number, imagePath: string, prompt?: string, modelId?: string) => 
+    ipcRenderer.invoke('wanx-generate-image', originalAssetId, imagePath, prompt, modelId) as Promise<{ success: boolean; task_id?: string; error?: string }>,
+  wanxGenerateVideo: (originalAssetId: number, parentGenerationId: number | null, imagePath: string, prompt?: string, modelId?: string) => 
+    ipcRenderer.invoke('wanx-generate-video', originalAssetId, parentGenerationId, imagePath, prompt, modelId) as Promise<{ success: boolean; task_id?: string; error?: string }>,
+  wanxGetTaskStatus: (taskId: string, modelId?: string) => 
+    ipcRenderer.invoke('wanx-get-task-status', taskId, modelId) as Promise<{ success: boolean; status?: string; url?: string; error?: string }>,
   wanxCompleteTask: (
     taskId: string,
     originalAssetId: number,
     parentGenerationId: number | null,
     generationType: string,
-    prompt?: string
-  ) => ipcRenderer.invoke('wanx-complete-task', taskId, originalAssetId, parentGenerationId, generationType, prompt) as Promise<{ success: boolean; generation?: AiGeneration; error?: string }>,
+    prompt?: string,
+    modelId?: string
+  ) => ipcRenderer.invoke('wanx-complete-task', taskId, originalAssetId, parentGenerationId, generationType, prompt, modelId) as Promise<{ success: boolean; generation?: AiGeneration; error?: string }>,
   getAppDataDir: () => ipcRenderer.invoke('get-app-data-dir') as Promise<string>
 });
 
@@ -81,6 +93,8 @@ declare global {
       searchAssets: (query: string) => Promise<Asset[]>;
       getAssetsByType: (fileType: 'image' | 'video' | 'audio') => Promise<Asset[]>;
       updateAssetDescription: (assetId: number, description: string) => Promise<{ success: boolean }>;
+      updateAssetPrompt: (assetId: number, prompt: string) => Promise<{ success: boolean }>;
+      updateGenerationPrompt: (generationId: number, prompt: string) => Promise<{ success: boolean }>;
       exportCopyPaths: (assetIds: number[]) => Promise<{ success: boolean; count?: number; error?: string }>;
       exportToFolder: (assetIds: number[]) => Promise<{ success: boolean; canceled?: boolean; count?: number; error?: string }>;
       exportJsonMetadata: (assetIds: number[]) => Promise<{ success: boolean; canceled?: boolean; count?: number; path?: string; error?: string }>;
@@ -100,20 +114,26 @@ declare global {
         generationType: string,
         prompt?: string
       ) => Promise<{ success: boolean; id?: number; canceled?: boolean; error?: string; generation?: AiGeneration }>,
-      setWanXConfig: (apiKey: string) => Promise<{ success: boolean }>,
-      getWanXConfig: () => Promise<{ success: boolean; hasApiKey: boolean }>,
-      wanxGenerateImage: (originalAssetId: number, imagePath: string, prompt?: string) => 
+      getAllModelConfigs: () => Promise<any[]>,
+      getModelConfigsByType: (modelType: 'image' | 'video') => Promise<any[]>,
+      getDefaultModelConfig: (modelType: 'image' | 'video') => Promise<any | undefined>,
+      upsertModelConfig: (config: any) => Promise<{ success: boolean; id: number }>,
+      deleteModelConfig: (modelId: string) => Promise<{ success: boolean }>,
+      setDefaultModel: (modelId: string, modelType: 'image' | 'video') => Promise<{ success: boolean }>,
+
+      wanxGenerateImage: (originalAssetId: number, imagePath: string, prompt?: string, modelId?: string) => 
         Promise<{ success: boolean; task_id?: string; error?: string }>,
-      wanxGenerateVideo: (originalAssetId: number, parentGenerationId: number | null, imagePath: string, prompt?: string) => 
+      wanxGenerateVideo: (originalAssetId: number, parentGenerationId: number | null, imagePath: string, prompt?: string, modelId?: string) => 
         Promise<{ success: boolean; task_id?: string; error?: string }>,
-      wanxGetTaskStatus: (taskId: string) => 
+      wanxGetTaskStatus: (taskId: string, modelId?: string) => 
         Promise<{ success: boolean; status?: string; url?: string; error?: string }>,
       wanxCompleteTask: (
         taskId: string,
         originalAssetId: number,
         parentGenerationId: number | null,
         generationType: string,
-        prompt?: string
+        prompt?: string,
+        modelId?: string
       ) => Promise<{ success: boolean; generation?: AiGeneration; error?: string }>,
       getAppDataDir: () => Promise<string>,
     };

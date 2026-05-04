@@ -26,19 +26,28 @@ import {
   deleteAiGeneration,
   setMainGeneration,
   unsetMainGeneration,
-  getAppDataDir
+  getAppDataDir,
+  updateGenerationPrompt,
+  updateAssetPrompt
 } from './database';
 import { importFiles } from './fileHandler';
 import { importAiGenerationFile } from './fileHandler';
 import {
-  setWanXConfig,
-  getWanXConfig,
   generateImage,
   generateVideo,
   getTaskStatus,
   waitForTaskCompletion,
   downloadToFile
 } from './wanxiang';
+import {
+  getAllModelConfigs,
+  getModelConfigsByType,
+  getDefaultModelConfig,
+  upsertModelConfig,
+  deleteModelConfig,
+  setDefaultModel,
+  ModelConfig
+} from './database';
 import { Asset, AiGeneration, GenerationType } from '../src/types';
 
 let mainWindow: BrowserWindow | null = null;
@@ -159,6 +168,21 @@ ipcMain.handle('update-asset-description', (_event: Electron.IpcMainInvokeEvent,
   return { success: true };
 });
 
+ipcMain.handle('update-generation-prompt', (_event: Electron.IpcMainInvokeEvent, generationId: number, prompt: string) => {
+  try {
+    updateGenerationPrompt(generationId, prompt);
+    return { success: true };
+  } catch (error: any) {
+    console.error('update-generation-prompt error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('update-asset-prompt', (_event: Electron.IpcMainInvokeEvent, assetId: number, prompt: string) => {
+  updateAssetPrompt(assetId, prompt);
+  return { success: true };
+});
+
 // AI 生成相关 IPC
 ipcMain.handle('save-ai-generation', (_event: Electron.IpcMainInvokeEvent, generation: Omit<AiGeneration, 'id' | 'created_at'>) => {
   const id = insertAiGeneration(generation);
@@ -239,32 +263,55 @@ ipcMain.handle('import-ai-generation', async (
   }
 });
 
-// 配置阿里万相 API Key
-ipcMain.handle('set-wanx-config', async (
-  _event: Electron.IpcMainInvokeEvent,
-  apiKey: string
-) => {
-  setWanXConfig({ apiKey });
+// ==================== 模型配置 IPC ====================
+
+ipcMain.handle('get-all-model-configs', () => {
+  return getAllModelConfigs();
+});
+
+ipcMain.handle('get-model-configs-by-type', (_event: Electron.IpcMainInvokeEvent, modelType: 'image' | 'video') => {
+  return getModelConfigsByType(modelType);
+});
+
+ipcMain.handle('get-default-model-config', (_event: Electron.IpcMainInvokeEvent, modelType: 'image' | 'video') => {
+  return getDefaultModelConfig(modelType);
+});
+
+ipcMain.handle('upsert-model-config', (_event: Electron.IpcMainInvokeEvent, config: Omit<ModelConfig, 'id' | 'created_at' | 'updated_at'>) => {
+  const id = upsertModelConfig(config);
+  return { success: true, id };
+});
+
+ipcMain.handle('delete-model-config', (_event: Electron.IpcMainInvokeEvent, modelId: string) => {
+  deleteModelConfig(modelId);
   return { success: true };
 });
 
-ipcMain.handle('get-wanx-config', async () => {
-  const config = getWanXConfig();
-  return { success: true, hasApiKey: !!config.apiKey };
+ipcMain.handle('set-default-model', (_event: Electron.IpcMainInvokeEvent, modelId: string, modelType: 'image' | 'video') => {
+  setDefaultModel(modelId, modelType);
+  return { success: true };
 });
+
+// ==================== AI 生成 IPC ====================
 
 // 图生图
 ipcMain.handle('wanx-generate-image', async (
   _event: Electron.IpcMainInvokeEvent,
   originalAssetId: number,
   imagePath: string,
-  prompt?: string
+  prompt?: string,
+  modelId?: string
 ) => {
   try {
-    const task = await generateImage(imagePath, prompt);
+    let modelConfig: ModelConfig | undefined;
+    if (modelId) {
+      const configs = getModelConfigsByType('image');
+      modelConfig = configs.find(c => c.model_id === modelId);
+    }
+    const task = await generateImage(imagePath, prompt, modelConfig);
     return { success: true, task_id: task.task_id, original_asset_id: originalAssetId };
   } catch (error: any) {
-    console.error('阿里万相图生图失败:', error);
+    console.error('图生图失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -275,13 +322,19 @@ ipcMain.handle('wanx-generate-video', async (
   originalAssetId: number,
   parentGenerationId: number | null,
   imagePath: string,
-  prompt?: string
+  prompt?: string,
+  modelId?: string
 ) => {
   try {
-    const task = await generateVideo(imagePath, prompt);
+    let modelConfig: ModelConfig | undefined;
+    if (modelId) {
+      const configs = getModelConfigsByType('video');
+      modelConfig = configs.find(c => c.model_id === modelId);
+    }
+    const task = await generateVideo(imagePath, prompt, modelConfig);
     return { success: true, task_id: task.task_id, original_asset_id: originalAssetId, parent_generation_id: parentGenerationId };
   } catch (error: any) {
-    console.error('阿里万相图生视频失败:', error);
+    console.error('图生视频失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -289,10 +342,16 @@ ipcMain.handle('wanx-generate-video', async (
 // 查询任务状态
 ipcMain.handle('wanx-get-task-status', async (
   _event: Electron.IpcMainInvokeEvent,
-  taskId: string
+  taskId: string,
+  modelId?: string
 ) => {
   try {
-    const result = await getTaskStatus(taskId);
+    let modelConfig: ModelConfig | undefined;
+    if (modelId) {
+      const allConfigs = getAllModelConfigs();
+      modelConfig = allConfigs.find(c => c.model_id === modelId);
+    }
+    const result = await getTaskStatus(taskId, modelConfig);
     return { success: true, ...result };
   } catch (error: any) {
     console.error('查询任务状态失败:', error);
@@ -307,13 +366,18 @@ ipcMain.handle('wanx-complete-task', async (
   originalAssetId: number,
   parentGenerationId: number | null,
   generationType: GenerationType,
-  prompt?: string
+  prompt?: string,
+  modelId?: string
 ) => {
   try {
-    const result = await waitForTaskCompletion(taskId);
+    let modelConfig: ModelConfig | undefined;
+    if (modelId) {
+      const allConfigs = getAllModelConfigs();
+      modelConfig = allConfigs.find(c => c.model_id === modelId);
+    }
+    const result = await waitForTaskCompletion(taskId, modelConfig);
     
     // 保存文件到本地
-    const stat = fs.statSync(getAppDataDir());
     const dateDir = path.join(getAppDataDir(), 'ai_generations');
     if (!fs.existsSync(dateDir)) {
       fs.mkdirSync(dateDir, { recursive: true });

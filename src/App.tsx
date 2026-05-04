@@ -358,7 +358,7 @@ const App: React.FC = () => {
                   style={{ cursor: 'pointer', fontSize: '14px', padding: '4px 12px', width: '100%', textAlign: 'center' }}
                 >
                   <PictureOutlined style={{ marginRight: 4 }} />
-                  照片
+                  图片
                 </AntTag>
                 <AntTag
                   color={selectedType === 'video' ? 'blue' : 'default'}
@@ -439,7 +439,7 @@ const App: React.FC = () => {
                             共 {sortedAssets.length} 个素材
                             {selectedType !== 'all' && (
                               <span style={{ marginLeft: 8 }}>
-                                （类型：{selectedType === 'image' ? '照片' : selectedType === 'video' ? '视频' : '音频'}）
+                                （类型：{selectedType === 'image' ? '图片' : selectedType === 'video' ? '视频' : '音频'}）
                               </span>
                             )}
                             {selectedTagIds.length > 0 && (

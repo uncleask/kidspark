@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Button, Tag as AntTag, Input, Space, message, Tooltip, Card, Row, Col, Timeline, Divider, Tabs, Badge } from 'antd';
+import { Modal, Button, Tag as AntTag, Input, Space, message, Tooltip, Card, Row, Col, Timeline, Divider, Tabs, Badge, Select, Form, Radio } from 'antd';
 import {
   DeleteOutlined,
   UndoOutlined,
@@ -18,11 +18,13 @@ import {
   ExperimentOutlined,
   FileImageFilled,
   BranchesOutlined,
-  NodeIndexOutlined
+  NodeIndexOutlined,
+  CheckCircleOutlined
 } from '@ant-design/icons';
 import type { Asset, AiGeneration, GenerationType } from '../types';
 
 const { TextArea } = Input;
+const { Option } = Select;
 
 interface AssetPreviewModalProps {
   asset: Asset | null;
@@ -30,6 +32,17 @@ interface AssetPreviewModalProps {
   onClose: () => void;
   onTagUpdated: () => void;
   onDeleteAsset: (assetId: number) => Promise<void>;
+}
+
+interface ModelConfig {
+  id?: number;
+  model_id: string;
+  model_name: string;
+  model_type: 'image' | 'video';
+  api_key: string;
+  api_base_url: string;
+  parameters: string;
+  is_default: number;
 }
 
 type ViewItem = 
@@ -43,7 +56,19 @@ type GeneratingTask = {
   originalAssetId: number;
   parentGenerationId?: number | null;
   prompt?: string;
+  modelId?: string;
 };
+
+// 预设模型列表
+const PRESET_IMAGE_MODELS = [
+  { model_id: 'wanx2.7-image-pro', model_name: '万相 2.7 图生图 Pro', description: '复杂指令遵循和一致性全面提升，支持4K输出' },
+  { model_id: 'qwen-image-2.0', model_name: '通义万相 图生图 2.0', description: '融合图片生成与编辑，更快更强' },
+];
+
+const PRESET_VIDEO_MODELS = [
+  { model_id: 'wan2.7-i2v-2026-04-25', model_name: '万相 2.7 图生视频', description: '情绪动作表现升级，运镜丝滑呈现' },
+  { model_id: 'happyhorse-1.0-t2v', model_name: 'HappyHorse 1.0', description: '影视级创意生成，还原极致动态细节' },
+];
 
 const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
   asset,
@@ -68,14 +93,22 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatePrompt, setGeneratePrompt] = useState('');
 
-  const [showApiKeyConfig, setShowApiKeyConfig] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [hasApiKey, setHasApiKey] = useState(false);
+  const [showModelConfig, setShowModelConfig] = useState(false);
+  const [modelConfigTab, setModelConfigTab] = useState<'image' | 'video'>('image');
+  const [imageModels, setImageModels] = useState<ModelConfig[]>([]);
+  const [videoModels, setVideoModels] = useState<ModelConfig[]>([]);
+  const [selectedImageModel, setSelectedImageModel] = useState<string>('');
+  const [selectedVideoModel, setSelectedVideoModel] = useState<string>('');
   const [activeGeneratingTasks, setActiveGeneratingTasks] = useState<GeneratingTask[]>([]);
+  const [generationFilter, setGenerationFilter] = useState<'all' | 'image' | 'video'>('all');
 
   // 当前选中项的描述/提示词
   const [currentDescription, setCurrentDescription] = useState('');
   const [currentPrompt, setCurrentPrompt] = useState('');
+
+  // 模型配置表单
+  const [editingModel, setEditingModel] = useState<ModelConfig | null>(null);
+  const [modelForm] = Form.useForm();
 
   useEffect(() => {
     if (asset && isOpen) {
@@ -85,7 +118,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
       setCurrentDescription(asset.description || '');
       setCurrentPrompt('');
       loadGenerations();
-      checkApiKeyConfig();
+      loadModelConfigs();
     }
   }, [asset, isOpen]);
 
@@ -94,12 +127,13 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     if (!currentView) return;
     if (currentView.type === 'original') {
       setCurrentDescription(currentView.data.description || '');
-      setCurrentPrompt('');
+      setCurrentPrompt(currentView.data.prompt || '');
     } else {
       setCurrentDescription('');
       setCurrentPrompt(currentView.data.prompt || '');
     }
     setRotation(0);
+    setIsEditingDescription(false);
   }, [currentView]);
 
   useEffect(() => {
@@ -112,7 +146,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
       for (let i = 0; i < newTasks.length; i++) {
         const task = newTasks[i];
         try {
-          const statusResult = await window.electronAPI.wanxGetTaskStatus(task.taskId);
+          const statusResult = await window.electronAPI.wanxGetTaskStatus(task.taskId, task.modelId);
           if (statusResult.success && statusResult.status) {
             if (task.status !== statusResult.status) {
               newTasks[i] = { ...task, status: statusResult.status };
@@ -125,7 +159,8 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                     task.originalAssetId,
                     task.parentGenerationId || null,
                     task.type === 'image' ? 'colored' : 'video',
-                    task.prompt
+                    task.prompt,
+                    task.modelId
                   );
 
                   if (completeResult.success) {
@@ -167,6 +202,13 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     try {
       const data = await window.electronAPI.getAiGenerationsByAsset(asset.id);
       setGenerations(data);
+      // 如果当前选中的是 AI 生成版本，同步更新 currentView 中的数据
+      if (currentView && currentView.type === 'generation') {
+        const updatedGen = data.find((g: AiGeneration) => g.id === currentView.data.id);
+        if (updatedGen) {
+          setCurrentView({ type: 'generation', data: updatedGen });
+        }
+      }
       // 加载主线链
       const chainData = await window.electronAPI.getMainGenerationChain(asset.id);
       if (chainData) {
@@ -174,6 +216,27 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
       }
     } catch (error) {
       console.error('Failed to load generations:', error);
+    }
+  };
+
+  const loadModelConfigs = async () => {
+    try {
+      const allConfigs = await window.electronAPI.getAllModelConfigs();
+      const imgModels = allConfigs.filter((c: ModelConfig) => c.model_type === 'image');
+      const vidModels = allConfigs.filter((c: ModelConfig) => c.model_type === 'video');
+      setImageModels(imgModels);
+      setVideoModels(vidModels);
+
+      // 设置默认选中
+      const defaultImg = imgModels.find((m: ModelConfig) => m.is_default === 1);
+      const defaultVid = vidModels.find((m: ModelConfig) => m.is_default === 1);
+      if (defaultImg) setSelectedImageModel(defaultImg.model_id);
+      else if (imgModels.length > 0) setSelectedImageModel(imgModels[0].model_id);
+
+      if (defaultVid) setSelectedVideoModel(defaultVid.model_id);
+      else if (vidModels.length > 0) setSelectedVideoModel(vidModels[0].model_id);
+    } catch (err) {
+      console.error('加载模型配置失败:', err);
     }
   };
 
@@ -195,24 +258,66 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     }
   };
 
-  const checkApiKeyConfig = async () => {
+  const handleSaveModelConfig = async (values: any) => {
     try {
-      const result = await window.electronAPI.getWanXConfig();
-      setHasApiKey(result.hasApiKey);
+      const config: Omit<ModelConfig, 'id' | 'created_at' | 'updated_at'> = {
+        model_id: values.model_id,
+        model_name: values.model_name,
+        model_type: values.model_type,
+        api_key: values.api_key,
+        api_base_url: values.api_base_url || 'https://dashscope.aliyuncs.com/api/v1/services',
+        parameters: values.parameters || '{}',
+        is_default: values.is_default ? 1 : 0
+      };
+      await window.electronAPI.upsertModelConfig(config);
+      message.success('模型配置已保存');
+      setEditingModel(null);
+      modelForm.resetFields();
+      loadModelConfigs();
     } catch (err) {
-      console.error('检查 API Key 配置失败:', err);
+      message.error('保存模型配置失败');
     }
   };
 
-  const handleSaveApiKey = async () => {
+  const handleDeleteModel = async (modelId: string) => {
     try {
-      await window.electronAPI.setWanXConfig(apiKey);
-      setHasApiKey(true);
-      setShowApiKeyConfig(false);
-      message.success('API Key 已保存');
+      await window.electronAPI.deleteModelConfig(modelId);
+      message.success('模型配置已删除');
+      loadModelConfigs();
     } catch (err) {
-      message.error('保存 API Key 失败');
+      message.error('删除模型配置失败');
     }
+  };
+
+  const handleSetDefaultModel = async (modelId: string, modelType: 'image' | 'video') => {
+    try {
+      await window.electronAPI.setDefaultModel(modelId, modelType);
+      message.success('默认模型已设置');
+      loadModelConfigs();
+    } catch (err) {
+      message.error('设置默认模型失败');
+    }
+  };
+
+  const handleAddPresetModel = (preset: { model_id: string; model_name: string }, modelType: 'image' | 'video') => {
+    setEditingModel({
+      model_id: preset.model_id,
+      model_name: preset.model_name,
+      model_type: modelType,
+      api_key: '',
+      api_base_url: 'https://dashscope.aliyuncs.com/api/v1/services',
+      parameters: '{}',
+      is_default: modelType === 'image' ? (imageModels.length === 0 ? 1 : 0) : (videoModels.length === 0 ? 1 : 0)
+    });
+    modelForm.setFieldsValue({
+      model_id: preset.model_id,
+      model_name: preset.model_name,
+      model_type: modelType,
+      api_key: '',
+      api_base_url: 'https://dashscope.aliyuncs.com/api/v1/services',
+      parameters: '{}',
+      is_default: modelType === 'image' ? (imageModels.length === 0 ? true : false) : (videoModels.length === 0 ? true : false)
+    });
   };
 
   const getCurrentImagePath = (): string | null => {
@@ -233,8 +338,10 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
 
   const handleGenerateImage = async () => {
     if (!asset) return;
-    if (!hasApiKey) {
-      setShowApiKeyConfig(true);
+    if (!selectedImageModel) {
+      message.warning('请先配置图片生成模型');
+      setShowModelConfig(true);
+      setModelConfigTab('image');
       return;
     }
 
@@ -246,7 +353,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
 
     setIsGenerating(true);
     try {
-      const result = await window.electronAPI.wanxGenerateImage(asset.id, imagePath, generatePrompt || undefined);
+      const result = await window.electronAPI.wanxGenerateImage(asset.id, imagePath, generatePrompt || undefined, selectedImageModel);
 
       if (result.success && result.task_id) {
         message.success('图生图任务已提交，正在生成...');
@@ -255,7 +362,8 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           taskId: result.task_id,
           status: 'PENDING',
           originalAssetId: asset.id,
-          prompt: generatePrompt
+          prompt: generatePrompt,
+          modelId: selectedImageModel
         }]);
         setGeneratePrompt('');
       } else {
@@ -270,8 +378,10 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
 
   const handleGenerateVideo = async () => {
     if (!asset) return;
-    if (!hasApiKey) {
-      setShowApiKeyConfig(true);
+    if (!selectedVideoModel) {
+      message.warning('请先配置视频生成模型');
+      setShowModelConfig(true);
+      setModelConfigTab('video');
       return;
     }
 
@@ -285,7 +395,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
 
     setIsGenerating(true);
     try {
-      const result = await window.electronAPI.wanxGenerateVideo(asset.id, parentId, imagePath, generatePrompt || undefined);
+      const result = await window.electronAPI.wanxGenerateVideo(asset.id, parentId, imagePath, generatePrompt || undefined, selectedVideoModel);
 
       if (result.success && result.task_id) {
         message.success('图生视频任务已提交，正在生成...');
@@ -295,7 +405,8 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           status: 'PENDING',
           originalAssetId: asset.id,
           parentGenerationId: parentId,
-          prompt: generatePrompt
+          prompt: generatePrompt,
+          modelId: selectedVideoModel
         }]);
         setGeneratePrompt('');
       } else {
@@ -388,17 +499,31 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     setIsSavingDescription(true);
     try {
       if (currentView.type === 'original') {
+        // 保存原始素材的描述和提示词
         await window.electronAPI.updateAssetDescription(asset.id, currentDescription);
-        message.success('描述已保存');
+        await window.electronAPI.updateAssetPrompt(asset.id, currentPrompt);
+        message.success('描述和提示词已保存');
         setIsEditingDescription(false);
         onTagUpdated();
       } else {
-        // AI 生成版本的描述保存（如果需要可以扩展数据库）
-        message.info('AI生成版本的描述暂不支持保存');
+        const result = await window.electronAPI.updateGenerationPrompt(currentView.data.id, currentPrompt);
+        if (result.success) {
+          message.success('提示词已保存');
+          setIsEditingDescription(false);
+          // 直接更新 currentView 中的数据，避免等待 loadGenerations
+          setCurrentView({
+            type: 'generation',
+            data: { ...currentView.data, prompt: currentPrompt }
+          });
+          // 同时刷新列表
+          loadGenerations();
+        } else {
+          message.error('保存提示词失败');
+        }
       }
     } catch (error) {
       console.error('Failed to save description:', error);
-      message.error('保存描述失败');
+      message.error('保存失败');
     } finally {
       setIsSavingDescription(false);
     }
@@ -578,54 +703,68 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
         {generations.length > 0 && (
           <>
             <Divider style={{ margin: '12px 0' }} />
-            <div style={{ fontSize: '12px', color: '#999', marginBottom: '8px' }}>AI 生成版本</div>
-            {generations.map(gen => (
-              <div 
-                key={gen.id}
-                onClick={() => handleViewItem({ type: 'generation', data: gen })}
-                style={{
-                  padding: '10px',
-                  marginBottom: '8px',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  border: isCurrentView({ type: 'generation', data: gen }) ? '2px solid #1890ff' : '1px solid #e8e8e8',
-                  background: isCurrentView({ type: 'generation', data: gen }) ? '#e6f7ff' : '#fff',
-                  transition: 'all 0.2s',
-                  position: 'relative'
-                }}
-              >
-                <Space wrap>
-                  <AntTag color={getTypeColor(gen.generation_type)}>{getTypeIcon(gen.generation_type)}{getTypeLabel(gen.generation_type)}</AntTag>
-                  {gen.is_main ? <AntTag color="gold"><StarFilled /> 主线</AntTag> : null}
-                </Space>
-                <div style={{ marginTop: '6px', fontSize: '12px', color: '#666', wordBreak: 'break-all' }}>
-                  {gen.file_name}
-                </div>
-                {gen.thumbnail_path && gen.generation_type !== 'video' && (
-                  <div style={{ width: '100%', aspectRatio: '16/9', marginTop: '6px', borderRadius: '4px', overflow: 'hidden' }}>
-                    <img 
-                      src={`file://${gen.thumbnail_path}`} 
-                      alt="thumb" 
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                    />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontSize: '12px', color: '#999' }}>AI 生成版本</div>
+              <Space size="small">
+                <AntTag color={generationFilter === 'all' ? 'blue' : 'default'} style={{ cursor: 'pointer' }} onClick={() => setGenerationFilter('all')}>全部</AntTag>
+                <AntTag color={generationFilter === 'image' ? 'green' : 'default'} style={{ cursor: 'pointer' }} onClick={() => setGenerationFilter('image')}>AI图片</AntTag>
+                <AntTag color={generationFilter === 'video' ? 'cyan' : 'default'} style={{ cursor: 'pointer' }} onClick={() => setGenerationFilter('video')}>AI视频</AntTag>
+              </Space>
+            </div>
+            {generations
+              .filter(gen => {
+                if (generationFilter === 'all') return true;
+                if (generationFilter === 'image') return gen.generation_type !== 'video';
+                if (generationFilter === 'video') return gen.generation_type === 'video';
+                return true;
+              })
+              .map(gen => (
+                <div 
+                  key={gen.id}
+                  onClick={() => handleViewItem({ type: 'generation', data: gen })}
+                  style={{
+                    padding: '10px',
+                    marginBottom: '8px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    border: isCurrentView({ type: 'generation', data: gen }) ? '2px solid #1890ff' : '1px solid #e8e8e8',
+                    background: isCurrentView({ type: 'generation', data: gen }) ? '#e6f7ff' : '#fff',
+                    transition: 'all 0.2s',
+                    position: 'relative'
+                  }}
+                >
+                  <Space wrap>
+                    <AntTag color={getTypeColor(gen.generation_type)}>{getTypeIcon(gen.generation_type)}{getTypeLabel(gen.generation_type)}</AntTag>
+                    {gen.is_main ? <AntTag color="gold"><StarFilled /> 主线</AntTag> : null}
+                  </Space>
+                  <div style={{ marginTop: '6px', fontSize: '12px', color: '#666', wordBreak: 'break-all' }}>
+                    {gen.file_name}
                   </div>
-                )}
-                {gen.generation_type === 'video' && (
-                  <div style={{ width: '100%', aspectRatio: '16/9', background: '#001529', borderRadius: '4px', marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', overflow: 'hidden' }}>
-                    <VideoCameraOutlined style={{ fontSize: '24px' }} />
-                  </div>
-                )}
-                {/* 操作按钮 */}
-                <div style={{ marginTop: '8px', display: 'flex', gap: '4px' }}>
-                  {gen.is_main ? (
-                    <Button size="small" icon={<StarFilled />} onClick={(e) => handleUnsetMainGeneration(gen.id, e)}>取消主线</Button>
-                  ) : (
-                    <Button size="small" icon={<StarOutlined />} onClick={(e) => handleSetMainGeneration(gen.id, e)}>设为主线</Button>
+                  {gen.thumbnail_path && gen.generation_type !== 'video' && (
+                    <div style={{ width: '100%', aspectRatio: '16/9', marginTop: '6px', borderRadius: '4px', overflow: 'hidden' }}>
+                      <img 
+                        src={`file://${gen.thumbnail_path}`} 
+                        alt="thumb" 
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                      />
+                    </div>
                   )}
-                  <Button size="small" danger icon={<CloseCircleOutlined />} onClick={(e) => handleDeleteGeneration(gen.id, e)}>移除</Button>
+                  {gen.generation_type === 'video' && (
+                    <div style={{ width: '100%', aspectRatio: '16/9', background: '#001529', borderRadius: '4px', marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', overflow: 'hidden' }}>
+                      <VideoCameraOutlined style={{ fontSize: '24px' }} />
+                    </div>
+                  )}
+                  {/* 操作按钮 */}
+                  <div style={{ marginTop: '8px', display: 'flex', gap: '4px' }}>
+                    {gen.is_main ? (
+                      <Button size="small" icon={<StarFilled />} onClick={(e) => handleUnsetMainGeneration(gen.id, e)}>取消主线</Button>
+                    ) : (
+                      <Button size="small" icon={<StarOutlined />} onClick={(e) => handleSetMainGeneration(gen.id, e)}>设为主线</Button>
+                    )}
+                    <Button size="small" danger icon={<CloseCircleOutlined />} onClick={(e) => handleDeleteGeneration(gen.id, e)}>移除</Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
           </>
         )}
       </div>
@@ -653,10 +792,10 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           )}
           <Space wrap>
             <Button type="primary" icon={<PictureOutlined />} onClick={handleGenerateImage} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'image')}>
-              {activeGeneratingTasks.some(t => t.type === 'image') ? '生成中...' : '生成彩色图'}
+              {activeGeneratingTasks.some(t => t.type === 'image') ? '生成中...' : 'AI生成图片'}
             </Button>
             <Button type="primary" icon={<VideoCameraOutlined />} onClick={handleGenerateVideo} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'video')}>
-              {activeGeneratingTasks.some(t => t.type === 'video') ? '生成中...' : '生成视频'}
+              {activeGeneratingTasks.some(t => t.type === 'video') ? '生成中...' : 'AI视频'}
             </Button>
             <Button icon={<UploadOutlined />} onClick={handleImportImage} loading={isGenerating}>导入图片</Button>
             <Button icon={<UploadOutlined />} onClick={handleImportVideo} loading={isGenerating}>导入视频</Button>
@@ -753,6 +892,120 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     );
   };
 
+  const renderModelConfigModal = () => {
+    const currentModels = modelConfigTab === 'image' ? imageModels : videoModels;
+    const presetModels = modelConfigTab === 'image' ? PRESET_IMAGE_MODELS : PRESET_VIDEO_MODELS;
+
+    return (
+      <Modal
+        title="AI 模型配置"
+        open={showModelConfig}
+        onCancel={() => { setShowModelConfig(false); setEditingModel(null); }}
+        width={800}
+        footer={[<Button key="close" onClick={() => { setShowModelConfig(false); setEditingModel(null); }}>关闭</Button>]}
+      >
+        <Tabs activeKey={modelConfigTab} onChange={(key) => { setModelConfigTab(key as 'image' | 'video'); setEditingModel(null); }}>
+          <Tabs.TabPane tab={<span><PictureOutlined /> 图片生成模型</span>} key="image" />
+          <Tabs.TabPane tab={<span><VideoCameraOutlined /> 视频生成模型</span>} key="video" />
+        </Tabs>
+
+        {editingModel ? (
+          <Card title={editingModel.id ? '编辑模型配置' : '添加模型配置'} size="small" style={{ marginBottom: '16px' }}>
+            <Form form={modelForm} onFinish={handleSaveModelConfig} layout="vertical">
+              <Form.Item name="model_type" hidden><Input /></Form.Item>
+              <Form.Item name="model_id" label="模型 ID" rules={[{ required: true }]}>
+                <Input disabled={!!editingModel.id} placeholder="例如: wanx2.7-image-pro" />
+              </Form.Item>
+              <Form.Item name="model_name" label="模型名称" rules={[{ required: true }]}>
+                <Input placeholder="例如: 万相 2.7 图生图 Pro" />
+              </Form.Item>
+              <Form.Item name="api_key" label="API Key" rules={[{ required: true }]}>
+                <Input.Password placeholder="请输入 API Key" />
+              </Form.Item>
+              <Form.Item name="api_base_url" label="API Base URL" initialValue="https://dashscope.aliyuncs.com/api/v1/services">
+                <Input placeholder="https://dashscope.aliyuncs.com/api/v1/services" />
+              </Form.Item>
+              <Form.Item name="parameters" label="额外参数 (JSON格式)" initialValue="{}">
+                <TextArea rows={3} placeholder='{"size": "1024*1024"}' />
+              </Form.Item>
+              <Form.Item name="is_default" valuePropName="checked">
+                <Radio>设为默认模型</Radio>
+              </Form.Item>
+              <Space>
+                <Button type="primary" htmlType="submit">保存</Button>
+                <Button onClick={() => { setEditingModel(null); modelForm.resetFields(); }}>取消</Button>
+              </Space>
+            </Form>
+          </Card>
+        ) : (
+          <>
+            <Card title="已配置模型" size="small" style={{ marginBottom: '16px' }}>
+              {currentModels.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#999', padding: '20px' }}>暂无配置，请从下方添加预设模型</div>
+              ) : (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {currentModels.map(model => (
+                    <Card key={model.model_id} size="small">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <Space>
+                            <strong>{model.model_name}</strong>
+                            {model.is_default === 1 && <AntTag color="blue">默认</AntTag>}
+                          </Space>
+                          <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>{model.model_id}</div>
+                        </div>
+                        <Space>
+                          {model.is_default !== 1 && (
+                            <Button size="small" onClick={() => handleSetDefaultModel(model.model_id, model.model_type)}>设为默认</Button>
+                          )}
+                          <Button size="small" onClick={() => {
+                            setEditingModel(model);
+                            modelForm.setFieldsValue({
+                              ...model,
+                              is_default: model.is_default === 1
+                            });
+                          }}>编辑</Button>
+                          <Button size="small" danger onClick={() => handleDeleteModel(model.model_id)}>删除</Button>
+                        </Space>
+                      </div>
+                    </Card>
+                  ))}
+                </Space>
+              )}
+            </Card>
+
+            <Card title="添加预设模型" size="small">
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {presetModels.map(preset => {
+                  const isAdded = currentModels.some(m => m.model_id === preset.model_id);
+                  return (
+                    <Card key={preset.model_id} size="small" style={{ opacity: isAdded ? 0.6 : 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <strong>{preset.model_name}</strong>
+                          <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>{preset.description}</div>
+                          <div style={{ fontSize: '11px', color: '#999' }}>{preset.model_id}</div>
+                        </div>
+                        <Button 
+                          size="small" 
+                          type="primary" 
+                          disabled={isAdded}
+                          onClick={() => handleAddPresetModel(preset, modelConfigTab)}
+                        >
+                          {isAdded ? '已添加' : '添加'}
+                        </Button>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </Space>
+            </Card>
+          </>
+        )}
+      </Modal>
+    );
+  };
+
   return (
     <Modal
       title={<div>{asset?.file_name}</div>}
@@ -805,7 +1058,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                   />
                 )}
                 <TextArea 
-                  placeholder="AI 生成提示词..." 
+                  placeholder={currentView?.type === 'original' ? "AI 生成提示词（用于该原始素材）..." : "AI 生成提示词..."} 
                   value={currentPrompt} 
                   onChange={(e) => setCurrentPrompt(e.target.value)} 
                   rows={2} 
@@ -832,7 +1085,33 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
               addonAfter={<Button type="primary" size="small" onClick={handleAddTag}>添加</Button>} />
           </Card>
 
-          <Card title={<Space>AI 任务<Button type="text" size="small" icon={<SettingOutlined />} onClick={() => setShowApiKeyConfig(true)}>配置</Button></Space>} style={{ marginBottom: '16px' }} size="small">
+          <Card title="AI 模型" style={{ marginBottom: '16px' }} size="small">
+            <Space direction="vertical" style={{ width: '100%' }} size="small">
+              <div>
+                <div style={{ fontSize: '12px', color: '#999', marginBottom: '2px' }}>
+                  <PictureOutlined style={{ color: '#1890ff', marginRight: '4px' }} />
+                  图片生成模型
+                </div>
+                <div style={{ fontSize: '13px', color: '#333', fontWeight: 500, paddingLeft: '16px' }}>
+                  {imageModels.find(m => m.model_id === selectedImageModel)?.model_name || '未配置'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '12px', color: '#999', marginBottom: '2px' }}>
+                  <VideoCameraOutlined style={{ color: '#52c41a', marginRight: '4px' }} />
+                  视频生成模型
+                </div>
+                <div style={{ fontSize: '13px', color: '#333', fontWeight: 500, paddingLeft: '16px' }}>
+                  {videoModels.find(m => m.model_id === selectedVideoModel)?.model_name || '未配置'}
+                </div>
+              </div>
+              <Button type="link" size="small" icon={<SettingOutlined />} onClick={() => setShowModelConfig(true)} style={{ padding: 0, marginTop: '4px' }}>
+                配置模型
+              </Button>
+            </Space>
+          </Card>
+
+          <Card title="AI 任务" style={{ marginBottom: '16px' }} size="small">
             {activeGeneratingTasks.length === 0 ? (
               <div style={{ textAlign: 'center', color: '#999', padding: '12px 0' }}>暂无进行中的任务</div>
             ) : (
@@ -874,17 +1153,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
         </Col>
       </Row>
 
-      <Modal
-        title="配置阿里万相 API Key"
-        open={showApiKeyConfig}
-        onCancel={() => setShowApiKeyConfig(false)}
-        footer={[<Button key="cancel" onClick={() => setShowApiKeyConfig(false)}>取消</Button>, <Button key="save" type="primary" onClick={handleSaveApiKey}>保存</Button>]}
-      >
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Input.Password placeholder="请输入 API Key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
-          <div style={{ fontSize: '12px', color: '#666' }}>请从阿里云百炼控制台获取 API Key</div>
-        </Space>
-      </Modal>
+      {renderModelConfigModal()}
     </Modal>
   );
 };

@@ -375,7 +375,7 @@ const SampleImages: React.FC = () => {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <Tag color="green">2. AI 自动上色</Tag>
-            <Text>使用阿里万相 API 生成精美的彩色图片</Text>
+            <Text>调用AI-Agent的图片生成功能，生成精美的彩色图片</Text>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <Tag color="purple">3. 生成 AI 视频</Tag>

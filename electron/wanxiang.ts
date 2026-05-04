@@ -1,51 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import fs from 'fs';
 import path from 'path';
-
-// 阿里万相 API 配置
-const API_BASE_URL = 'https://dashscope.aliyuncs.com/api/v1/services';
-const WANX_V1_IMAGE = `${API_BASE_URL}/aigc/wanx-v1/image-generation`;
-const WANX_V1_VIDEO = `${API_BASE_URL}/aigc/wanx-v1/video-generation`;
-const WANX_V1_TASK = `${API_BASE_URL}/aigc/async-result`;
-
-export interface WanXConfig {
-  apiKey: string;
-  models: {
-    image: string;
-    video: string;
-  };
-}
-
-// 默认配置
-const DEFAULT_CONFIG: WanXConfig = {
-  apiKey: '',
-  models: {
-    image: 'wanx-v1',
-    video: 'wanx-v1-video-generation'
-  }
-};
-
-// 从配置文件读取或使用默认
-let config: WanXConfig = { ...DEFAULT_CONFIG };
-
-export function setWanXConfig(newConfig: Partial<WanXConfig>) {
-  config = { ...config, ...newConfig };
-}
-
-export function getWanXConfig(): WanXConfig {
-  return { ...config };
-}
-
-const createAxiosInstance = (apiKey: string): AxiosInstance => {
-  return axios.create({
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'X-DashScope-Async': 'enable'
-    },
-    timeout: 60000
-  });
-};
+import { getDefaultModelConfig, ModelConfig } from './database';
 
 // 任务状态类型
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
@@ -73,37 +29,72 @@ function imageToBase64(filePath: string): string {
   return `data:${mimeType};base64,${base64}`;
 }
 
+function createAxiosInstance(apiKey: string, apiBaseUrl?: string): AxiosInstance {
+  return axios.create({
+    baseURL: apiBaseUrl || 'https://dashscope.aliyuncs.com/api/v1/services',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'X-DashScope-Async': 'enable'
+    },
+    timeout: 60000
+  });
+}
+
+// 获取模型配置的 API 端点
+function getApiEndpoint(modelConfig: ModelConfig, taskType: 'image' | 'video'): string {
+  const baseUrl = modelConfig.api_base_url || 'https://dashscope.aliyuncs.com/api/v1/services';
+  if (taskType === 'image') {
+    return `${baseUrl}/aigc/wanx-v1/image-generation`;
+  } else {
+    return `${baseUrl}/aigc/wanx-v1/video-generation`;
+  }
+}
+
 // 图生图
 export async function generateImage(
   imagePath: string,
   prompt?: string,
-  model: string = 'wanx-v1'
+  modelConfig?: ModelConfig
 ): Promise<{ task_id: string; status: TaskStatus }> {
-  if (!config.apiKey) {
-    throw new Error('请先配置阿里万相 API Key');
+  const config = modelConfig || getDefaultModelConfig('image');
+  if (!config) {
+    throw new Error('请先配置图片生成模型');
+  }
+  if (!config.api_key) {
+    throw new Error('模型 API Key 未配置');
   }
 
   const base64Image = imageToBase64(imagePath);
+  const instance = createAxiosInstance(config.api_key, config.api_base_url);
+  const endpoint = getApiEndpoint(config, 'image');
 
-  const instance = createAxiosInstance(config.apiKey);
+  // 解析额外参数
+  let extraParams: Record<string, any> = {};
+  try {
+    extraParams = JSON.parse(config.parameters || '{}');
+  } catch (e) {
+    extraParams = {};
+  }
 
-  const data = {
-    model,
+  const data: Record<string, any> = {
+    model: config.model_id,
     input: {
       image: base64Image,
       prompt: prompt || '彩色化这张简笔画'
     },
     parameters: {
-      size: '1024*1024'
+      size: extraParams.size || '1024*1024',
+      ...extraParams
     }
   };
 
   try {
-    const response = await instance.post(WANX_V1_IMAGE, data);
+    const response = await instance.post(endpoint, data);
     const taskId = response.data.output.task_id;
     return { task_id: taskId, status: 'PENDING' };
   } catch (error: any) {
-    console.error('阿里万相图生图请求失败:', error.response?.data || error.message);
+    console.error('图生图请求失败:', error.response?.data || error.message);
     throw new Error(error.response?.data?.message || error.message);
   }
 }
@@ -112,51 +103,72 @@ export async function generateImage(
 export async function generateVideo(
   imagePath: string,
   prompt?: string,
-  model: string = 'wanx-v1-video-generation'
+  modelConfig?: ModelConfig
 ): Promise<{ task_id: string; status: TaskStatus }> {
-  if (!config.apiKey) {
-    throw new Error('请先配置阿里万相 API Key');
+  const config = modelConfig || getDefaultModelConfig('video');
+  if (!config) {
+    throw new Error('请先配置视频生成模型');
+  }
+  if (!config.api_key) {
+    throw new Error('模型 API Key 未配置');
   }
 
   const base64Image = imageToBase64(imagePath);
+  const instance = createAxiosInstance(config.api_key, config.api_base_url);
+  const endpoint = getApiEndpoint(config, 'video');
 
-  const instance = createAxiosInstance(config.apiKey);
+  // 解析额外参数
+  let extraParams: Record<string, any> = {};
+  try {
+    extraParams = JSON.parse(config.parameters || '{}');
+  } catch (e) {
+    extraParams = {};
+  }
 
-  const data = {
-    model,
+  const data: Record<string, any> = {
+    model: config.model_id,
     input: {
       image: base64Image,
       prompt: prompt || '让这张图片动起来'
     },
     parameters: {
-      duration: 5
+      duration: extraParams.duration || 5,
+      ...extraParams
     }
   };
 
   try {
-    const response = await instance.post(WANX_V1_VIDEO, data);
+    const response = await instance.post(endpoint, data);
     const taskId = response.data.output.task_id;
     return { task_id: taskId, status: 'PENDING' };
   } catch (error: any) {
-    console.error('阿里万相图生视频请求失败:', error.response?.data || error.message);
+    console.error('图生视频请求失败:', error.response?.data || error.message);
     throw new Error(error.response?.data?.message || error.message);
   }
 }
 
 // 查询任务状态
-export async function getTaskStatus(taskId: string): Promise<{
+export async function getTaskStatus(
+  taskId: string,
+  modelConfig?: ModelConfig
+): Promise<{
   status: TaskStatus;
   url?: string;
   error?: string;
 }> {
-  if (!config.apiKey) {
-    throw new Error('请先配置阿里万相 API Key');
+  const config = modelConfig || getDefaultModelConfig('image') || getDefaultModelConfig('video');
+  if (!config) {
+    throw new Error('模型配置未找到');
+  }
+  if (!config.api_key) {
+    throw new Error('模型 API Key 未配置');
   }
 
-  const instance = createAxiosInstance(config.apiKey);
+  const instance = createAxiosInstance(config.api_key, config.api_base_url);
+  const baseUrl = config.api_base_url || 'https://dashscope.aliyuncs.com/api/v1/services';
 
   try {
-    const response = await instance.get(`${WANX_V1_TASK}/${taskId}`);
+    const response = await instance.get(`${baseUrl}/aigc/async-result/${taskId}`);
     
     const status = response.data.output.task_status;
     const taskStatus = status as TaskStatus;
@@ -179,12 +191,13 @@ export async function getTaskStatus(taskId: string): Promise<{
 // 轮询等待任务完成
 export async function waitForTaskCompletion(
   taskId: string,
+  modelConfig?: ModelConfig,
   pollInterval: number = 3000,
   maxPolls: number = 120
 ): Promise<{ url: string; error?: string }> {
   for (let i = 0; i < maxPolls; i++) {
     await new Promise(resolve => setTimeout(resolve, pollInterval));
-    const result = await getTaskStatus(taskId);
+    const result = await getTaskStatus(taskId, modelConfig);
     
     if (result.status === 'SUCCEEDED' && result.url) {
       return { url: result.url };

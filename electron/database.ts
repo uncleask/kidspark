@@ -28,6 +28,7 @@ export function initDatabase() {
       thumbnail_path TEXT,
       file_size INTEGER NOT NULL,
       description TEXT DEFAULT '',
+      prompt TEXT DEFAULT '',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -59,37 +60,52 @@ export function initDatabase() {
       is_deleted INTEGER DEFAULT 0,
       is_main INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (original_asset_id) REFERENCES assets(id) ON DELETE CASCADE,
       FOREIGN KEY (parent_generation_id) REFERENCES ai_generations(id) ON DELETE CASCADE
+    );
+
+    -- AI 模型配置表
+    CREATE TABLE IF NOT EXISTS model_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      model_id TEXT NOT NULL UNIQUE,
+      model_name TEXT NOT NULL,
+      model_type TEXT NOT NULL CHECK(model_type IN ('image', 'video')),
+      api_key TEXT NOT NULL,
+      api_base_url TEXT DEFAULT 'https://dashscope.aliyuncs.com/api/v1/services',
+      parameters TEXT DEFAULT '{}',
+      is_default INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE INDEX IF NOT EXISTS idx_assets_created_at ON assets(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(tag_name);
     CREATE INDEX IF NOT EXISTS idx_ai_generations_asset_id ON ai_generations(original_asset_id);
     CREATE INDEX IF NOT EXISTS idx_ai_generations_parent_id ON ai_generations(parent_generation_id);
+    CREATE INDEX IF NOT EXISTS idx_model_configs_type ON model_configs(model_type);
   `);
 
-  // 迁移：为旧数据库添加缺失字段
+  // 迁移：为 assets 表添加 prompt 字段
+  try {
+    const assetTableInfo = db.prepare(`PRAGMA table_info(assets)`).all() as any[];
+    const assetColumns = assetTableInfo.map(col => col.name);
+    if (!assetColumns.includes('prompt')) {
+      db.exec(`ALTER TABLE assets ADD COLUMN prompt TEXT DEFAULT ''`);
+    }
+  } catch (e) {
+    console.error('Assets table migration failed:', e);
+  }
+
+  // 迁移：重建 ai_generations 表以移除旧的 CHECK 约束并添加新字段
   try {
     const tableInfo = db.prepare(`PRAGMA table_info(ai_generations)`).all() as any[];
     const columns = tableInfo.map(col => col.name);
-    if (!columns.includes('is_deleted')) {
-      db.exec(`ALTER TABLE ai_generations ADD COLUMN is_deleted INTEGER DEFAULT 0`);
-    }
-    if (!columns.includes('is_main')) {
-      db.exec(`ALTER TABLE ai_generations ADD COLUMN is_main INTEGER DEFAULT 0`);
-    }
-  } catch (e) {
-    console.error('Database migration failed:', e);
-  }
-
-  // 迁移：重建 ai_generations 表以移除旧的 CHECK 约束
-  try {
-    const tableInfo = db.prepare(`PRAGMA table_info(ai_generations)`).all() as any[];
-    const hasCheckConstraint = tableInfo.some((col: any) => col.name === 'generation_type' && col.dflt_value !== null);
-    const hasIsDeleted = tableInfo.some((col: any) => col.name === 'is_deleted');
-    // 如果缺少 is_deleted 字段，说明是旧表结构，需要重建
-    if (!hasIsDeleted) {
+    const hasIsDeleted = columns.includes('is_deleted');
+    const hasUpdatedAt = columns.includes('updated_at');
+    
+    // 如果缺少 is_deleted 或 updated_at 字段，说明是旧表结构，需要重建
+    if (!hasIsDeleted || !hasUpdatedAt) {
       const oldData = db.prepare(`SELECT * FROM ai_generations`).all();
       db.exec(`
         DROP TABLE ai_generations;
@@ -106,6 +122,7 @@ export function initDatabase() {
           is_deleted INTEGER DEFAULT 0,
           is_main INTEGER DEFAULT 0,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (original_asset_id) REFERENCES assets(id) ON DELETE CASCADE,
           FOREIGN KEY (parent_generation_id) REFERENCES ai_generations(id) ON DELETE CASCADE
         );
@@ -114,14 +131,15 @@ export function initDatabase() {
       `);
       if (oldData && (oldData as any[]).length > 0) {
         const insertStmt = db.prepare(`
-          INSERT INTO ai_generations (id, original_asset_id, parent_generation_id, generation_type, file_path, file_name, file_size, thumbnail_path, prompt, is_deleted, is_main, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO ai_generations (id, original_asset_id, parent_generation_id, generation_type, file_path, file_name, file_size, thumbnail_path, prompt, is_deleted, is_main, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         for (const row of oldData as any[]) {
           insertStmt.run(
             row.id, row.original_asset_id, row.parent_generation_id, row.generation_type,
             row.file_path, row.file_name, row.file_size, row.thumbnail_path, row.prompt,
-            row.is_deleted || 0, row.is_main || 0, row.created_at
+            row.is_deleted || 0, row.is_main || 0, row.created_at,
+            row.updated_at || row.created_at
           );
         }
       }
@@ -286,6 +304,11 @@ export function updateAssetDescription(assetId: number, description: string) {
   stmt.run(description, assetId);
 }
 
+export function updateAssetPrompt(assetId: number, prompt: string) {
+  const stmt = db.prepare('UPDATE assets SET prompt = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+  stmt.run(prompt, assetId);
+}
+
 export function updateAssetThumbnail(assetId: number, thumbnailPath: string | null) {
   const stmt = db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?');
   stmt.run(thumbnailPath, assetId);
@@ -294,6 +317,11 @@ export function updateAssetThumbnail(assetId: number, thumbnailPath: string | nu
 export function updateAiGenerationThumbnail(generationId: number, thumbnailPath: string | null) {
   const stmt = db.prepare('UPDATE ai_generations SET thumbnail_path = ? WHERE id = ?');
   stmt.run(thumbnailPath, generationId);
+}
+
+export function updateGenerationPrompt(generationId: number, prompt: string) {
+  const stmt = db.prepare('UPDATE ai_generations SET prompt = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+  stmt.run(prompt, generationId);
 }
 
 export function getAssetsByTags(tagIds: number[]): Asset[] {
@@ -583,6 +611,89 @@ export function setMainGeneration(generationId: number, originalAssetId: number)
 export function unsetMainGeneration(generationId: number) {
   const stmt = db.prepare('UPDATE ai_generations SET is_main = 0 WHERE id = ?');
   stmt.run(generationId);
+}
+
+// ==================== 模型配置相关功能 ====================
+
+export interface ModelConfig {
+  id?: number;
+  model_id: string;
+  model_name: string;
+  model_type: 'image' | 'video';
+  api_key: string;
+  api_base_url: string;
+  parameters: string;
+  is_default: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * 插入或更新模型配置
+ */
+export function upsertModelConfig(config: Omit<ModelConfig, 'id' | 'created_at' | 'updated_at'>): number {
+  const existing = db.prepare('SELECT id FROM model_configs WHERE model_id = ?').get(config.model_id) as { id: number } | undefined;
+  if (existing) {
+    const stmt = db.prepare(`
+      UPDATE model_configs 
+      SET model_name = ?, model_type = ?, api_key = ?, api_base_url = ?, parameters = ?, is_default = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE model_id = ?
+    `);
+    stmt.run(config.model_name, config.model_type, config.api_key, config.api_base_url, config.parameters, config.is_default, config.model_id);
+    return existing.id;
+  } else {
+    const stmt = db.prepare(`
+      INSERT INTO model_configs (model_id, model_name, model_type, api_key, api_base_url, parameters, is_default)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(config.model_id, config.model_name, config.model_type, config.api_key, config.api_base_url, config.parameters, config.is_default);
+    return result.lastInsertRowid as number;
+  }
+}
+
+/**
+ * 获取所有模型配置
+ */
+export function getAllModelConfigs(): ModelConfig[] {
+  const stmt = db.prepare('SELECT * FROM model_configs ORDER BY model_type, is_default DESC, model_name');
+  return stmt.all() as ModelConfig[];
+}
+
+/**
+ * 按类型获取模型配置
+ */
+export function getModelConfigsByType(modelType: 'image' | 'video'): ModelConfig[] {
+  const stmt = db.prepare('SELECT * FROM model_configs WHERE model_type = ? ORDER BY is_default DESC, model_name');
+  return stmt.all(modelType) as ModelConfig[];
+}
+
+/**
+ * 获取默认模型配置
+ */
+export function getDefaultModelConfig(modelType: 'image' | 'video'): ModelConfig | undefined {
+  const stmt = db.prepare('SELECT * FROM model_configs WHERE model_type = ? AND is_default = 1 LIMIT 1');
+  return stmt.get(modelType) as ModelConfig | undefined;
+}
+
+/**
+ * 删除模型配置
+ */
+export function deleteModelConfig(modelId: string) {
+  const stmt = db.prepare('DELETE FROM model_configs WHERE model_id = ?');
+  stmt.run(modelId);
+}
+
+/**
+ * 设置默认模型
+ */
+export function setDefaultModel(modelId: string, modelType: 'image' | 'video') {
+  const dbTransaction = db.transaction(() => {
+    const clearStmt = db.prepare('UPDATE model_configs SET is_default = 0 WHERE model_type = ?');
+    clearStmt.run(modelType);
+    const setStmt = db.prepare('UPDATE model_configs SET is_default = 1 WHERE model_id = ?');
+    setStmt.run(modelId);
+  });
+  dbTransaction();
 }
 
 

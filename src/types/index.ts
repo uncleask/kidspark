@@ -6,6 +6,7 @@ export interface Asset {
   thumbnail_path: string | null;
   file_size: number;
   description?: string;
+  prompt?: string;
   created_at: string;
   updated_at: string;
   tags?: Tag[];
