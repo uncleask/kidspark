@@ -22,6 +22,7 @@ import {
   CheckCircleOutlined
 } from '@ant-design/icons';
 import type { Asset, AiGeneration, GenerationType } from '../types';
+import AiGenerateModal from './AiGenerateModal';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -106,6 +107,10 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
   const [selectedVideoModel, setSelectedVideoModel] = useState<string>('');
   const [activeGeneratingTasks, setActiveGeneratingTasks] = useState<GeneratingTask[]>([]);
   const [generationFilter, setGenerationFilter] = useState<'all' | 'image' | 'video'>('all');
+  
+  // AI生成弹框状态
+  const [showAiGenerateModal, setShowAiGenerateModal] = useState(false);
+  const [aiGenerateType, setAiGenerateType] = useState<'image' | 'video'>('image');
 
   // 当前选中项的描述/提示词
   const [currentDescription, setCurrentDescription] = useState('');
@@ -122,10 +127,38 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
       setCurrentView({ type: 'original', data: asset });
       setCurrentDescription(asset.description || '');
       setCurrentPrompt('');
+      setShowAiGenerateModal(false);
       loadGenerations();
       loadModelConfigs();
+      loadActiveTasks();
     }
   }, [asset, isOpen]);
+
+  // 加载活跃任务（从数据库）
+  const loadActiveTasks = async () => {
+    try {
+      const result = await window.electronAPI.getActiveAiTasks();
+      if (result.success && result.tasks) {
+        const tasks = result.tasks.map((t: any) => ({
+          type: t.task_type,
+          taskId: t.task_id,
+          status: t.status,
+          originalAssetId: t.original_asset_id,
+          parentGenerationId: t.parent_generation_id,
+          prompt: t.prompt,
+          modelId: t.model_id,
+          error: t.error,
+          errorCode: t.error_code,
+          requestId: t.request_id,
+          isTimeout: !!t.is_timeout,
+          startTime: new Date(t.created_at).getTime()
+        }));
+        setActiveGeneratingTasks(tasks);
+      }
+    } catch (error) {
+      console.error('加载活跃任务失败:', error);
+    }
+  };
 
   // 当 currentView 变化时，更新描述和提示词
   useEffect(() => {
@@ -141,6 +174,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     setIsEditingDescription(false);
   }, [currentView]);
 
+  // 自动轮询任务状态
   useEffect(() => {
     if (activeGeneratingTasks.length === 0) return;
 
@@ -159,6 +193,9 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
             if (task.status !== statusResult.status) {
               newTasks[i] = { ...task, status: statusResult.status };
               shouldUpdate = true;
+
+              // 更新数据库中的任务状态
+              await window.electronAPI.updateAiTaskStatus(task.taskId, statusResult.status);
 
               if (statusResult.status === 'SUCCEEDED') {
                 try {
@@ -180,12 +217,14 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                   }
                 } catch (err) {
                   console.error('任务完成失败:', err);
+                  await window.electronAPI.updateAiTaskStatus(task.taskId, 'FAILED', '任务完成处理失败');
                   newTasks.splice(i, 1);
                   i--;
                   shouldUpdate = true;
                 }
               } else if (statusResult.status === 'FAILED') {
                 message.error(statusResult.error || '生成失败');
+                await window.electronAPI.updateAiTaskStatus(task.taskId, 'FAILED', statusResult.error || '生成失败');
                 newTasks[i] = { ...newTasks[i], status: 'FAILED', error: statusResult.error || '生成失败' };
                 shouldUpdate = true;
               }
@@ -193,6 +232,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           } else if (!statusResult.success) {
             // 查询失败
             newTasks[i] = { ...newTasks[i], status: 'FAILED', error: statusResult.error || '查询任务状态失败' };
+            await window.electronAPI.updateAiTaskStatus(task.taskId, 'FAILED', statusResult.error || '查询任务状态失败');
             shouldUpdate = true;
           }
         } catch (err) {
@@ -204,6 +244,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           const taskAge = Date.now() - (task as any).startTime;
           if (taskAge > 60000) {
             newTasks[i] = { ...newTasks[i], isTimeout: true };
+            await window.electronAPI.setAiTaskTimeout(task.taskId, true);
             shouldUpdate = true;
           }
         }
@@ -245,6 +286,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           }
         } else if (statusResult.status === 'FAILED') {
           message.error(statusResult.error || '生成失败');
+          await window.electronAPI.updateAiTaskStatus(task.taskId, 'FAILED', statusResult.error || '生成失败');
           setActiveGeneratingTasks(prev => {
             const newTasks = [...prev];
             newTasks[taskIndex] = { ...newTasks[taskIndex], status: 'FAILED', error: statusResult.error || '生成失败', isTimeout: false };
@@ -252,6 +294,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           });
         } else {
           message.info(`任务状态：${statusResult.status === 'PENDING' ? '等待中' : statusResult.status === 'RUNNING' ? '处理中' : statusResult.status}`);
+          await window.electronAPI.updateAiTaskStatus(task.taskId, statusResult.status);
           setActiveGeneratingTasks(prev => {
             const newTasks = [...prev];
             newTasks[taskIndex] = { ...newTasks[taskIndex], status: statusResult.status, isTimeout: false };
@@ -406,112 +449,118 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     return null;
   };
 
-  const handleGenerateImage = async () => {
-    if (!asset) return;
+  // 打开AI生成弹框
+  const handleOpenImageGenerateModal = () => {
     if (!selectedImageModel) {
       message.warning('请先配置图片生成模型');
       setShowModelConfig(true);
       setModelConfigTab('image');
       return;
     }
-
     const imagePath = getCurrentImagePath();
     if (!imagePath) {
       message.warning('当前内容不是图片，无法生成彩色图');
       return;
     }
-
-    setIsGenerating(true);
-    try {
-      const result = await window.electronAPI.wanxGenerateImage(asset.id, imagePath, generatePrompt || undefined, selectedImageModel);
-
-      if (result.success && result.task_id) {
-        message.success('图生图任务已提交，正在生成...');
-        setActiveGeneratingTasks(prev => [...prev, {
-          type: 'image',
-          taskId: result.task_id,
-          status: 'PENDING',
-          originalAssetId: asset.id,
-          prompt: generatePrompt,
-          modelId: selectedImageModel,
-          startTime: Date.now()
-        } as any]);
-        setGeneratePrompt('');
-      } else {
-        // 将错误信息添加到任务列表中展示
-        const errorMsg = result.error || '提交任务失败';
-        message.error(errorMsg);
-        setActiveGeneratingTasks(prev => [...prev, {
-          type: 'image',
-          taskId: 'failed-' + Date.now(),
-          status: 'FAILED',
-          originalAssetId: asset.id,
-          prompt: generatePrompt,
-          modelId: selectedImageModel,
-          error: errorMsg,
-          errorCode: (result as any).errorCode,
-          requestId: (result as any).requestId,
-          startTime: Date.now()
-        } as any]);
-      }
-    } catch (err) {
-      message.error('生成失败');
-    } finally {
-      setIsGenerating(false);
-    }
+    setAiGenerateType('image');
+    setShowAiGenerateModal(true);
   };
 
-  const handleGenerateVideo = async () => {
-    if (!asset) return;
+  const handleOpenVideoGenerateModal = () => {
     if (!selectedVideoModel) {
       message.warning('请先配置视频生成模型');
       setShowModelConfig(true);
       setModelConfigTab('video');
       return;
     }
-
     const imagePath = getCurrentImagePath();
     if (!imagePath) {
       message.warning('当前内容不是图片，无法生成视频');
       return;
     }
+    setAiGenerateType('video');
+    setShowAiGenerateModal(true);
+  };
+
+  // 处理AI生成确认
+  const handleAiGenerateConfirm = async (data: {
+    prompt: string;
+    useSavedPrompt: boolean;
+    useSavedDescription: boolean;
+    audioPath?: string;
+    importAudioToLibrary: boolean;
+  }) => {
+    if (!asset) return;
+    
+    const imagePath = getCurrentImagePath();
+    if (!imagePath) return;
 
     const parentId = getCurrentParentId();
 
     setIsGenerating(true);
     try {
-      const result = await window.electronAPI.wanxGenerateVideo(asset.id, parentId, imagePath, generatePrompt || undefined, selectedVideoModel);
+      if (aiGenerateType === 'image') {
+        const result = await window.electronAPI.wanxGenerateImage(asset.id, imagePath, data.prompt || undefined, selectedImageModel);
 
-      if (result.success && result.task_id) {
-        message.success('图生视频任务已提交，正在生成...');
-        setActiveGeneratingTasks(prev => [...prev, {
-          type: 'video',
-          taskId: result.task_id,
-          status: 'PENDING',
-          originalAssetId: asset.id,
-          parentGenerationId: parentId,
-          prompt: generatePrompt,
-          modelId: selectedVideoModel,
-          startTime: Date.now()
-        } as any]);
-        setGeneratePrompt('');
+        if (result.success && result.task_id) {
+          message.success('图生图任务已提交，正在生成...');
+          setActiveGeneratingTasks(prev => [...prev, {
+            type: 'image',
+            taskId: result.task_id,
+            status: 'PENDING',
+            originalAssetId: asset.id,
+            prompt: data.prompt,
+            modelId: selectedImageModel,
+            startTime: Date.now()
+          } as any]);
+        } else {
+          const errorMsg = result.error || '提交任务失败';
+          message.error(errorMsg);
+          setActiveGeneratingTasks(prev => [...prev, {
+            type: 'image',
+            taskId: 'failed-' + Date.now(),
+            status: 'FAILED',
+            originalAssetId: asset.id,
+            prompt: data.prompt,
+            modelId: selectedImageModel,
+            error: errorMsg,
+            errorCode: (result as any).errorCode,
+            requestId: (result as any).requestId,
+            startTime: Date.now()
+          } as any]);
+        }
       } else {
-        // 将错误信息添加到任务列表中展示
-        const errorMsg = result.error || '提交任务失败';
-        message.error(errorMsg);
-        setActiveGeneratingTasks(prev => [...prev, {
-          type: 'video',
-          taskId: 'failed-' + Date.now(),
-          status: 'FAILED',
-          originalAssetId: asset.id,
-          parentGenerationId: parentId,
-          prompt: generatePrompt,
-          modelId: selectedVideoModel,
-          error: errorMsg,
-          errorCode: (result as any).errorCode,
-          requestId: (result as any).requestId,
-          startTime: Date.now()
-        } as any]);
+        const result = await window.electronAPI.wanxGenerateVideo(asset.id, parentId, imagePath, data.prompt || undefined, selectedVideoModel, data.audioPath);
+
+        if (result.success && result.task_id) {
+          message.success('图生视频任务已提交，正在生成...');
+          setActiveGeneratingTasks(prev => [...prev, {
+            type: 'video',
+            taskId: result.task_id,
+            status: 'PENDING',
+            originalAssetId: asset.id,
+            parentGenerationId: parentId,
+            prompt: data.prompt,
+            modelId: selectedVideoModel,
+            startTime: Date.now()
+          } as any]);
+        } else {
+          const errorMsg = result.error || '提交任务失败';
+          message.error(errorMsg);
+          setActiveGeneratingTasks(prev => [...prev, {
+            type: 'video',
+            taskId: 'failed-' + Date.now(),
+            status: 'FAILED',
+            originalAssetId: asset.id,
+            parentGenerationId: parentId,
+            prompt: data.prompt,
+            modelId: selectedVideoModel,
+            error: errorMsg,
+            errorCode: (result as any).errorCode,
+            requestId: (result as any).requestId,
+            startTime: Date.now()
+          } as any]);
+        }
       }
     } catch (err) {
       message.error('生成失败');
@@ -694,11 +743,11 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     }
   };
 
-  const handleSetMainGeneration = async (genId: number, e: React.MouseEvent) => {
+  const handleSetMainGeneration = async (genId: number, genType: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!asset) return;
     try {
-      await window.electronAPI.setMainGeneration(genId, asset.id);
+      await window.electronAPI.setMainGeneration(genId, asset.id, genType);
       message.success('已设为主线');
       loadGenerations();
     } catch (error) {
@@ -869,7 +918,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                     {gen.is_main ? (
                       <Button size="small" icon={<StarFilled />} onClick={(e) => handleUnsetMainGeneration(gen.id, e)}>取消主线</Button>
                     ) : (
-                      <Button size="small" icon={<StarOutlined />} onClick={(e) => handleSetMainGeneration(gen.id, e)}>设为主线</Button>
+                      <Button size="small" icon={<StarOutlined />} onClick={(e) => handleSetMainGeneration(gen.id, gen.generation_type, e)}>设为主线</Button>
                     )}
                     <Button size="small" danger icon={<CloseCircleOutlined />} onClick={(e) => handleDeleteGeneration(gen.id, e)}>移除</Button>
                   </div>
@@ -901,16 +950,15 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
             <div style={{ color: '#1890ff' }}>当前旋转：{rotation}°</div>
           )}
           <Space wrap>
-            <Button type="primary" icon={<PictureOutlined />} onClick={handleGenerateImage} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'image' && t.status !== 'FAILED' && !t.isTimeout)}>
-              {activeGeneratingTasks.some(t => t.type === 'image' && t.status !== 'FAILED' && !t.isTimeout) ? '生成中...' : 'AI生成图片'}
+            <Button type="primary" icon={<PictureOutlined />} onClick={handleOpenImageGenerateModal} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'image' && t.status !== 'FAILED' && !t.isTimeout)}>
+              {activeGeneratingTasks.some(t => t.type === 'image' && t.status !== 'FAILED' && !t.isTimeout) ? '生成中...' : 'AI作图'}
             </Button>
-            <Button type="primary" icon={<VideoCameraOutlined />} onClick={handleGenerateVideo} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'video' && t.status !== 'FAILED' && !t.isTimeout)}>
+            <Button type="primary" icon={<VideoCameraOutlined />} onClick={handleOpenVideoGenerateModal} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'video' && t.status !== 'FAILED' && !t.isTimeout)}>
               {activeGeneratingTasks.some(t => t.type === 'video' && t.status !== 'FAILED' && !t.isTimeout) ? '生成中...' : 'AI视频'}
             </Button>
             <Button icon={<UploadOutlined />} onClick={handleImportImage} loading={isGenerating}>导入图片</Button>
             <Button icon={<UploadOutlined />} onClick={handleImportVideo} loading={isGenerating}>导入视频</Button>
           </Space>
-          <TextArea placeholder="输入 AI 生成提示词（可选）..." value={generatePrompt} onChange={(e) => setGeneratePrompt(e.target.value)} rows={1} style={{ maxWidth: 400, margin: '0 auto' }} />
         </Space>
       </div>
     );
@@ -1190,8 +1238,31 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           {renderChildGenerations()}
         </Col>
 
-        {/* 右侧：标签 + AI生成任务 + 版本信息 */}
+        {/* 右侧：当前内容信息 + 标签 + AI模型 + AI任务 */}
         <Col span={6}>
+          {/* 当前选中项的详细信息 - 移到最上面 */}
+          {currentView && (
+            <Card title="当前内容信息" size="small" style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#666' }}>
+                <div><strong>名称:</strong> {currentView.type === 'original' ? currentView.data.file_name : currentView.data.file_name}</div>
+                <div style={{ marginTop: '4px' }}><strong>类型:</strong> 
+                  {currentView.type === 'original' ? 
+                    (currentView.data.file_type === 'image' ? '原始图片' : currentView.data.file_type === 'video' ? '原始视频' : '音频') :
+                    getTypeLabel(currentView.data.generation_type)
+                  }
+                </div>
+                {currentView.type === 'generation' && currentView.data.parent_generation_id && (
+                  <div style={{ marginTop: '4px' }}><strong>基于:</strong> 
+                    {generations.find(g => g.id === currentView.data.parent_generation_id)?.file_name || '未知'}
+                  </div>
+                )}
+                <div style={{ marginTop: '4px' }}><strong>时间:</strong> 
+                  {new Date(currentView.type === 'original' ? currentView.data.created_at : currentView.data.created_at).toLocaleString()}
+                </div>
+              </div>
+            </Card>
+          )}
+
           <Card title="标签管理" style={{ marginBottom: '16px' }} size="small">
             <Space wrap size={[8, 8]} style={{ marginBottom: '16px' }}>
               {asset?.tags?.map(tag => <AntTag key={tag.id} closable onClose={() => handleRemoveTag(tag.id)}>{tag.tag_name}</AntTag>)}
@@ -1270,33 +1341,27 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
               </Space>
             )}
           </Card>
-
-          {/* 当前选中项的详细信息 */}
-          {currentView && (
-            <Card title="当前内容信息" size="small">
-              <div style={{ fontSize: '12px', color: '#666' }}>
-                <div><strong>名称:</strong> {currentView.type === 'original' ? currentView.data.file_name : currentView.data.file_name}</div>
-                <div style={{ marginTop: '4px' }}><strong>类型:</strong> 
-                  {currentView.type === 'original' ? 
-                    (currentView.data.file_type === 'image' ? '原始图片' : currentView.data.file_type === 'video' ? '原始视频' : '音频') :
-                    getTypeLabel(currentView.data.generation_type)
-                  }
-                </div>
-                {currentView.type === 'generation' && currentView.data.parent_generation_id && (
-                  <div style={{ marginTop: '4px' }}><strong>基于:</strong> 
-                    {generations.find(g => g.id === currentView.data.parent_generation_id)?.file_name || '未知'}
-                  </div>
-                )}
-                <div style={{ marginTop: '4px' }}><strong>时间:</strong> 
-                  {new Date(currentView.type === 'original' ? currentView.data.created_at : currentView.data.created_at).toLocaleString()}
-                </div>
-              </div>
-            </Card>
-          )}
         </Col>
       </Row>
 
       {renderModelConfigModal()}
+
+      {/* AI生成弹框 */}
+      <AiGenerateModal
+        isOpen={showAiGenerateModal}
+        onClose={() => setShowAiGenerateModal(false)}
+        type={aiGenerateType}
+        asset={asset}
+        currentView={currentView}
+        currentPrompt={currentPrompt}
+        currentDescription={currentDescription}
+        selectedModel={aiGenerateType === 'image' ? selectedImageModel : selectedVideoModel}
+        modelName={aiGenerateType === 'image' 
+          ? imageModels.find(m => m.model_id === selectedImageModel)?.model_name || ''
+          : videoModels.find(m => m.model_id === selectedVideoModel)?.model_name || ''
+        }
+        onConfirm={handleAiGenerateConfirm}
+      />
 
       {/* 图片全屏预览遮罩层 */}
       {isImagePreviewOpen && getCurrentFileType() === 'image' && (

@@ -79,11 +79,56 @@ export function initDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- AI 生成参数记录表
+    CREATE TABLE IF NOT EXISTS ai_generation_params (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      generation_id INTEGER,
+      task_id TEXT,
+      model_id TEXT,
+      model_name TEXT,
+      parameters TEXT DEFAULT '{}',
+      prompt TEXT,
+      generation_type TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (generation_id) REFERENCES ai_generations(id) ON DELETE CASCADE
+    );
+
+    -- 素材导入来源记录表
+    CREATE TABLE IF NOT EXISTS asset_import_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_id INTEGER NOT NULL UNIQUE,
+      source_type TEXT NOT NULL CHECK(source_type IN ('local', 'url')),
+      source_path TEXT,
+      original_url TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    );
+
+    -- AI 生成任务表（持久化进行中的任务）
+    CREATE TABLE IF NOT EXISTS ai_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL UNIQUE,
+      task_type TEXT NOT NULL CHECK(task_type IN ('image', 'video')),
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      original_asset_id INTEGER NOT NULL,
+      parent_generation_id INTEGER,
+      prompt TEXT,
+      model_id TEXT,
+      error TEXT,
+      error_code TEXT,
+      request_id TEXT,
+      is_timeout INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_assets_created_at ON assets(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(tag_name);
     CREATE INDEX IF NOT EXISTS idx_ai_generations_asset_id ON ai_generations(original_asset_id);
     CREATE INDEX IF NOT EXISTS idx_ai_generations_parent_id ON ai_generations(parent_generation_id);
     CREATE INDEX IF NOT EXISTS idx_model_configs_type ON model_configs(model_type);
+    CREATE INDEX IF NOT EXISTS idx_ai_tasks_status ON ai_tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_ai_tasks_asset_id ON ai_tasks(original_asset_id);
   `);
 
   // 迁移：为 assets 表添加 prompt 字段
@@ -363,20 +408,55 @@ export function getAssetsByTags(tagIds: number[]): Asset[] {
 /**
  * 搜索素材（按文件名、标签和描述搜索）
  */
-export function searchAssets(query: string): Asset[] {
+export function searchAssets(query: string, fileType?: 'image' | 'video' | 'audio'): Asset[] {
   const normalizedQuery = query.toLowerCase();
-  const stmt = db.prepare(`
+  let sql = `
     SELECT DISTINCT a.*, GROUP_CONCAT(t.id || ':' || t.tag_name) as tags_str,
       EXISTS(SELECT 1 FROM ai_generations ag WHERE ag.original_asset_id = a.id AND ag.generation_type IN ('colored', 'adapted') AND ag.is_deleted = 0) as has_colored,
       EXISTS(SELECT 1 FROM ai_generations ag WHERE ag.original_asset_id = a.id AND ag.generation_type = 'video' AND ag.is_deleted = 0) as has_video
     FROM assets a
     LEFT JOIN asset_tags at ON a.id = at.asset_id
     LEFT JOIN tags t ON at.tag_id = t.id
-    WHERE LOWER(a.file_name) LIKE ? OR LOWER(t.tag_name) LIKE ? OR LOWER(a.description) LIKE ?
+    WHERE (LOWER(a.file_name) LIKE ? OR LOWER(t.tag_name) LIKE ? OR LOWER(a.description) LIKE ?)
+  `;
+  const params: any[] = [`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`];
+  
+  if (fileType) {
+    sql += ` AND a.file_type = ?`;
+    params.push(fileType);
+  }
+  
+  sql += ` GROUP BY a.id ORDER BY a.created_at DESC`;
+  
+  const stmt = db.prepare(sql);
+  const rows = stmt.all(...params) as any[];
+  return rows.map(row => ({
+    ...row,
+    has_colored: !!row.has_colored,
+    has_video: !!row.has_video,
+    tags: row.tags_str ? row.tags_str.split(',').map((t: string) => {
+      const [id, tag_name] = t.split(':');
+      return { id: parseInt(id), tag_name };
+    }) : []
+  }));
+}
+
+/**
+ * 按时间段搜索素材
+ */
+export function getAssetsByDateRange(startDate: string, endDate: string): Asset[] {
+  const stmt = db.prepare(`
+    SELECT a.*, GROUP_CONCAT(t.id || ':' || t.tag_name) as tags_str,
+      EXISTS(SELECT 1 FROM ai_generations ag WHERE ag.original_asset_id = a.id AND ag.generation_type IN ('colored', 'adapted') AND ag.is_deleted = 0) as has_colored,
+      EXISTS(SELECT 1 FROM ai_generations ag WHERE ag.original_asset_id = a.id AND ag.generation_type = 'video' AND ag.is_deleted = 0) as has_video
+    FROM assets a
+    LEFT JOIN asset_tags at ON a.id = at.asset_id
+    LEFT JOIN tags t ON at.tag_id = t.id
+    WHERE date(a.created_at) >= date(?) AND date(a.created_at) <= date(?)
     GROUP BY a.id
     ORDER BY a.created_at DESC
   `);
-  const rows = stmt.all(`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`) as any[];
+  const rows = stmt.all(startDate, endDate) as any[];
   return rows.map(row => ({
     ...row,
     has_colored: !!row.has_colored,
@@ -594,11 +674,27 @@ export function deleteAiGeneration(generationId: number) {
 
 /**
  * 设置某个 AI 生成内容为主线
+ * 按类别独立：图片类和视频类的主线互不影响
  */
-export function setMainGeneration(generationId: number, originalAssetId: number) {
+export function setMainGeneration(generationId: number, originalAssetId: number, generationType: string) {
   const dbTransaction = db.transaction(() => {
-    const clearStmt = db.prepare('UPDATE ai_generations SET is_main = 0 WHERE original_asset_id = ?');
-    clearStmt.run(originalAssetId);
+    // 根据类别判断：video 是视频类，其他是图片类
+    const isVideo = generationType === 'video';
+    if (isVideo) {
+      // 只清除视频类的主线标志
+      const clearStmt = db.prepare(`
+        UPDATE ai_generations SET is_main = 0 
+        WHERE original_asset_id = ? AND generation_type = 'video'
+      `);
+      clearStmt.run(originalAssetId);
+    } else {
+      // 只清除图片类的主线标志（colored, adapted, other）
+      const clearStmt = db.prepare(`
+        UPDATE ai_generations SET is_main = 0 
+        WHERE original_asset_id = ? AND generation_type != 'video'
+      `);
+      clearStmt.run(originalAssetId);
+    }
     const setStmt = db.prepare('UPDATE ai_generations SET is_main = 1 WHERE id = ?');
     setStmt.run(generationId);
   });
@@ -694,6 +790,208 @@ export function setDefaultModel(modelId: string, modelType: 'image' | 'video') {
     setStmt.run(modelId);
   });
   dbTransaction();
+}
+
+// ==================== AI 任务持久化相关功能 ====================
+
+export interface AiTask {
+  id?: number;
+  task_id: string;
+  task_type: 'image' | 'video';
+  status: string;
+  original_asset_id: number;
+  parent_generation_id?: number | null;
+  prompt?: string | null;
+  model_id?: string | null;
+  error?: string | null;
+  error_code?: string | null;
+  request_id?: string | null;
+  is_timeout?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * 插入或更新AI任务
+ */
+export function upsertAiTask(task: Omit<AiTask, 'id' | 'created_at' | 'updated_at'>): number {
+  const existing = db.prepare('SELECT id FROM ai_tasks WHERE task_id = ?').get(task.task_id) as { id: number } | undefined;
+  if (existing) {
+    const stmt = db.prepare(`
+      UPDATE ai_tasks 
+      SET status = ?, prompt = ?, model_id = ?, error = ?, error_code = ?, request_id = ?, is_timeout = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE task_id = ?
+    `);
+    stmt.run(
+      task.status, task.prompt || null, task.model_id || null,
+      task.error || null, task.error_code || null, task.request_id || null,
+      task.is_timeout || 0, task.task_id
+    );
+    return existing.id;
+  } else {
+    const stmt = db.prepare(`
+      INSERT INTO ai_tasks (task_id, task_type, status, original_asset_id, parent_generation_id, prompt, model_id, error, error_code, request_id, is_timeout)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(
+      task.task_id, task.task_type, task.status, task.original_asset_id,
+      task.parent_generation_id || null, task.prompt || null, task.model_id || null,
+      task.error || null, task.error_code || null, task.request_id || null,
+      task.is_timeout || 0
+    );
+    return result.lastInsertRowid as number;
+  }
+}
+
+/**
+ * 获取所有未完成的AI任务
+ */
+export function getActiveAiTasks(): AiTask[] {
+  const stmt = db.prepare(`
+    SELECT * FROM ai_tasks 
+    WHERE status IN ('PENDING', 'RUNNING')
+    ORDER BY created_at DESC
+  `);
+  return stmt.all() as AiTask[];
+}
+
+/**
+ * 获取所有AI任务（包括已完成的）
+ */
+export function getAllAiTasks(limit: number = 50): AiTask[] {
+  const stmt = db.prepare(`
+    SELECT * FROM ai_tasks 
+    ORDER BY created_at DESC
+    LIMIT ?
+  `);
+  return stmt.all(limit) as AiTask[];
+}
+
+/**
+ * 更新任务状态
+ */
+export function updateAiTaskStatus(taskId: string, status: string, error?: string, errorCode?: string) {
+  const stmt = db.prepare(`
+    UPDATE ai_tasks 
+    SET status = ?, error = ?, error_code = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE task_id = ?
+  `);
+  stmt.run(status, error || null, errorCode || null, taskId);
+}
+
+/**
+ * 设置任务超时
+ */
+export function setAiTaskTimeout(taskId: string, isTimeout: boolean) {
+  const stmt = db.prepare(`
+    UPDATE ai_tasks 
+    SET is_timeout = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE task_id = ?
+  `);
+  stmt.run(isTimeout ? 1 : 0, taskId);
+}
+
+/**
+ * 删除已完成的任务（清理）
+ */
+export function deleteCompletedAiTasks() {
+  const stmt = db.prepare(`DELETE FROM ai_tasks WHERE status IN ('SUCCEEDED', 'FAILED')`);
+  stmt.run();
+}
+
+/**
+ * 获取进行中的任务数量
+ */
+export function getActiveAiTaskCount(): number {
+  const stmt = db.prepare(`SELECT COUNT(*) as count FROM ai_tasks WHERE status IN ('PENDING', 'RUNNING')`);
+  const result = stmt.get() as { count: number };
+  return result.count;
+}
+
+// ==================== AI 生成参数记录相关功能 ====================
+
+export interface AiGenerationParam {
+  id?: number;
+  generation_id?: number | null;
+  task_id?: string | null;
+  model_id?: string | null;
+  model_name?: string | null;
+  parameters?: string | null;
+  prompt?: string | null;
+  generation_type?: string | null;
+  created_at?: string;
+}
+
+/**
+ * 插入AI生成参数记录
+ */
+export function insertAiGenerationParam(param: Omit<AiGenerationParam, 'id' | 'created_at'>): number {
+  const stmt = db.prepare(`
+    INSERT INTO ai_generation_params (generation_id, task_id, model_id, model_name, parameters, prompt, generation_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const result = stmt.run(
+    param.generation_id || null,
+    param.task_id || null,
+    param.model_id || null,
+    param.model_name || null,
+    param.parameters || '{}',
+    param.prompt || null,
+    param.generation_type || null
+  );
+  return result.lastInsertRowid as number;
+}
+
+/**
+ * 根据生成ID获取参数记录
+ */
+export function getAiGenerationParamsByGenerationId(generationId: number): AiGenerationParam | null {
+  const stmt = db.prepare(`SELECT * FROM ai_generation_params WHERE generation_id = ?`);
+  return stmt.get(generationId) as AiGenerationParam | null;
+}
+
+/**
+ * 根据任务ID获取参数记录
+ */
+export function getAiGenerationParamsByTaskId(taskId: string): AiGenerationParam | null {
+  const stmt = db.prepare(`SELECT * FROM ai_generation_params WHERE task_id = ?`);
+  return stmt.get(taskId) as AiGenerationParam | null;
+}
+
+// ==================== 素材导入来源记录相关功能 ====================
+
+export interface AssetImportSource {
+  id?: number;
+  asset_id: number;
+  source_type: 'local' | 'url';
+  source_path?: string | null;
+  original_url?: string | null;
+  created_at?: string;
+}
+
+/**
+ * 插入素材导入来源记录
+ */
+export function insertAssetImportSource(source: Omit<AssetImportSource, 'id' | 'created_at'>): number {
+  const stmt = db.prepare(`
+    INSERT INTO asset_import_sources (asset_id, source_type, source_path, original_url)
+    VALUES (?, ?, ?, ?)
+  `);
+  const result = stmt.run(
+    source.asset_id,
+    source.source_type,
+    source.source_path || null,
+    source.original_url || null
+  );
+  return result.lastInsertRowid as number;
+}
+
+/**
+ * 根据素材ID获取导入来源
+ */
+export function getAssetImportSourceByAssetId(assetId: number): AssetImportSource | null {
+  const stmt = db.prepare(`SELECT * FROM asset_import_sources WHERE asset_id = ?`);
+  return stmt.get(assetId) as AssetImportSource | null;
 }
 
 

@@ -15,7 +15,9 @@ import {
   Modal,
   Checkbox,
   Divider,
-  Tabs
+  Tabs,
+  DatePicker,
+  Select
 } from 'antd';
 import {
   UploadOutlined,
@@ -31,8 +33,13 @@ import {
   PictureOutlined,
   VideoCameraOutlined,
   AudioOutlined,
-  ExperimentOutlined
+  ExperimentOutlined,
+  CalendarOutlined,
+  FilterOutlined,
+  FolderOpenOutlined,
+  FileOutlined
 } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import AssetCard from './components/AssetCard';
 import AssetPreviewModal from './components/AssetPreviewModal';
 import SampleImages from './components/SampleImages';
@@ -53,13 +60,32 @@ const App: React.FC = () => {
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  
+  // 时间段筛选状态
+  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null);
+  const [dateFilterPreset, setDateFilterPreset] = useState<string | null>(null);
+  const [showDateFilter, setShowDateFilter] = useState(false);
+  const [showCustomDateModal, setShowCustomDateModal] = useState(false);
+  const [customDateRange, setCustomDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null);
+  const { RangePicker } = DatePicker;
+  const { Option } = Select;
 
   // 获取资产数据
-  const fetchAssets = async (tagIds: number[] = [], query: string = '', type: 'all' | 'image' | 'video' | 'audio' = 'all') => {
+  const fetchAssets = async (tagIds: number[] = [], query: string = '', type: 'all' | 'image' | 'video' | 'audio' = 'all', startDate?: string, endDate?: string) => {
     try {
       let fetchedAssets: Asset[];
+      const fileType = type !== 'all' ? type : undefined;
+      
       if (query) {
-        fetchedAssets = await window.electronAPI.searchAssets(query);
+        // 搜索时保留类型过滤
+        fetchedAssets = await window.electronAPI.searchAssets(query, fileType);
+      } else if (startDate && endDate) {
+        // 时间段搜索时保留类型过滤
+        let dateAssets = await window.electronAPI.getAssetsByDateRange(startDate, endDate);
+        if (fileType) {
+          dateAssets = dateAssets.filter(a => a.file_type === fileType);
+        }
+        fetchedAssets = dateAssets;
       } else if (type !== 'all') {
         fetchedAssets = await window.electronAPI.getAssetsByType(type);
       } else if (tagIds.length > 0) {
@@ -84,9 +110,17 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchAssets(selectedTagIds, searchQuery, selectedType);
+    let startDate: string | undefined;
+    let endDate: string | undefined;
+    
+    if (dateRange && dateRange[0] && dateRange[1]) {
+      startDate = dateRange[0].format('YYYY-MM-DD');
+      endDate = dateRange[1].format('YYYY-MM-DD');
+    }
+    
+    fetchAssets(selectedTagIds, searchQuery, selectedType, startDate, endDate);
     fetchTags();
-  }, [selectedTagIds, searchQuery, selectedType]);
+  }, [selectedTagIds, searchQuery, selectedType, dateRange]);
 
   // 排序处理
   const sortedAssets = useMemo(() => {
@@ -97,12 +131,17 @@ const App: React.FC = () => {
     });
   }, [assets, sortOrder]);
 
-  const handleImport = async () => {
+  const handleImport = async (type: 'files' | 'folder' = 'files') => {
     try {
-      const importedIds = await window.electronAPI.importFiles();
+      let importedIds: number[] = [];
+      if (type === 'files') {
+        importedIds = await window.electronAPI.importFilesOnly();
+      } else {
+        importedIds = await window.electronAPI.importFiles();
+      }
       if (importedIds.length > 0) {
         message.success(`成功导入 ${importedIds.length} 个素材`);
-        fetchAssets(selectedTagIds, searchQuery);
+        fetchAssets(selectedTagIds, searchQuery, selectedType);
         fetchTags();
       }
     } catch (error) {
@@ -127,6 +166,78 @@ const App: React.FC = () => {
 
   const handleTypeSelect = (type: 'all' | 'image' | 'video' | 'audio') => {
     setSelectedType(type);
+  };
+  
+  // 时间段筛选处理
+  const handleDatePresetChange = (value: string) => {
+    const now = dayjs();
+    
+    if (value === 'all') {
+      setDateFilterPreset(null);
+      setDateRange(null);
+      setShowDateFilter(false);
+    } else if (value === '7days') {
+      setDateFilterPreset('7days');
+      setDateRange([now.subtract(7, 'day'), now]);
+      setShowDateFilter(true);
+    } else if (value === '30days') {
+      setDateFilterPreset('30days');
+      setDateRange([now.subtract(30, 'day'), now]);
+      setShowDateFilter(true);
+    } else if (value === '120days') {
+      setDateFilterPreset('120days');
+      setDateRange([now.subtract(120, 'day'), now]);
+      setShowDateFilter(true);
+    } else if (value === 'custom') {
+      // 打开自定义时间弹窗
+      setCustomDateRange(dateRange || [now.subtract(30, 'day'), now]);
+      setShowCustomDateModal(true);
+    }
+  };
+  
+  const handleDateRangeChange = (dates: [dayjs.Dayjs | null, dayjs.Dayjs | null] | null) => {
+    setDateRange(dates);
+    if (dates && dates[0] && dates[1]) {
+      setShowDateFilter(true);
+    }
+  };
+  
+  const clearDateFilter = () => {
+    setDateRange(null);
+    setDateFilterPreset(null);
+    setShowDateFilter(false);
+  };
+  
+  // 自定义时间弹窗确认
+  const handleCustomDateConfirm = () => {
+    if (customDateRange && customDateRange[0] && customDateRange[1]) {
+      setDateRange(customDateRange);
+      setDateFilterPreset('custom');
+      setShowDateFilter(true);
+      setShowCustomDateModal(false);
+    } else {
+      message.warning('请选择完整的时间范围');
+    }
+  };
+  
+  const handleCustomDateCancel = () => {
+    setShowCustomDateModal(false);
+    // 如果没有已选的时间范围，重置为全部
+    if (!dateRange || !dateRange[0] || !dateRange[1]) {
+      setDateFilterPreset(null);
+    }
+  };
+  
+  // 获取Select展示的label
+  const getDateFilterLabel = (): string => {
+    if (!dateFilterPreset) return '时间筛选';
+    if (dateFilterPreset === '7days') return '最近7天';
+    if (dateFilterPreset === '30days') return '最近30天';
+    if (dateFilterPreset === '120days') return '最近120天';
+    if (dateFilterPreset === 'custom' && dateRange && dateRange[0] && dateRange[1]) {
+      return `${dateRange[0].format('YYYY-MM-DD')} 至 ${dateRange[1].format('YYYY-MM-DD')}`;
+    }
+    return '时间筛选';
   };
 
   const handleDeleteTag = async (tagId: number, e: React.MouseEvent) => {
@@ -331,9 +442,26 @@ const App: React.FC = () => {
               </Button>
             </>
           )}
-          <Button type="primary" icon={<UploadOutlined />} onClick={handleImport}>
-            导入素材
-          </Button>
+          <Dropdown menu={{
+            items: [
+              {
+                key: 'files',
+                label: '选择文件',
+                icon: <FileOutlined />,
+                onClick: () => handleImport('files')
+              },
+              {
+                key: 'folder',
+                label: '选择文件夹',
+                icon: <FolderOpenOutlined />,
+                onClick: () => handleImport('folder')
+              }
+            ]
+          }} placement="bottomRight">
+            <Button type="primary" icon={<UploadOutlined />}>
+              导入素材
+            </Button>
+          </Dropdown>
         </div>
       </Header>
       <Layout>
@@ -425,56 +553,96 @@ const App: React.FC = () => {
                 ),
                 children: (
                   <div style={{ padding: '24px' }}>
-                    {sortedAssets.length > 0 && (
-                      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Space>
-                          <Checkbox
-                            checked={selectedAssetIds.length > 0 && selectedAssetIds.length === sortedAssets.length}
-                            indeterminate={selectedAssetIds.length > 0 && selectedAssetIds.length < sortedAssets.length}
-                            onChange={e => handleSelectAll(e.target.checked)}
+                    {/* 信息汇总行 - 始终展示，不依赖素材是否存在 */}
+                    <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Space>
+                        <Checkbox
+                          checked={sortedAssets.length > 0 && selectedAssetIds.length > 0 && selectedAssetIds.length === sortedAssets.length}
+                          indeterminate={sortedAssets.length > 0 && selectedAssetIds.length > 0 && selectedAssetIds.length < sortedAssets.length}
+                          onChange={e => handleSelectAll(e.target.checked)}
+                          disabled={sortedAssets.length === 0}
+                        >
+                          全选
+                        </Checkbox>
+                        <Text>
+                          共 {sortedAssets.length} 个素材
+                          {selectedType !== 'all' && (
+                            <span style={{ marginLeft: 8 }}>
+                              （类型：{selectedType === 'image' ? '图片' : selectedType === 'video' ? '视频' : '音频'}）
+                            </span>
+                          )}
+                          {selectedTagIds.length > 0 && (
+                            <span style={{ marginLeft: 8 }}>
+                              （筛选标签：{selectedTagIds.length}个）
+                            </span>
+                          )}
+                          {selectedAssetIds.length > 0 && (
+                            <span style={{ marginLeft: 8, color: '#1890ff' }}>
+                              已选择 {selectedAssetIds.length} 个
+                            </span>
+                          )}
+                        </Text>
+                      </Space>
+                      <Space>
+                        {/* 时间段筛选 */}
+                        <Select
+                          placeholder="时间筛选"
+                          style={{ width: dateFilterPreset === 'custom' && dateRange ? 260 : 130 }}
+                          value={dateFilterPreset || undefined}
+                          onChange={handleDatePresetChange}
+                          allowClear
+                          onClear={clearDateFilter}
+                          suffixIcon={<CalendarOutlined />}
+                          optionLabelProp="label"
+                          dropdownRender={(menu) => (
+                            <div onClick={(e) => {
+                              // 点击自定义选项时，始终打开弹窗
+                              const target = e.target as HTMLElement;
+                              if (target.textContent?.includes('自定义') || target.closest('[data-custom-option]')) {
+                                e.stopPropagation();
+                                const now = dayjs();
+                                setCustomDateRange(dateRange || [now.subtract(30, 'day'), now]);
+                                setShowCustomDateModal(true);
+                              }
+                            }}>
+                              {menu}
+                            </div>
+                          )}
+                        >
+                          <Option value="all" label="全部时间">全部时间</Option>
+                          <Option value="7days" label="最近7天">最近7天</Option>
+                          <Option value="30days" label="最近30天">最近30天</Option>
+                          <Option value="120days" label="最近120天">最近120天</Option>
+                          <Option 
+                            value="custom" 
+                            label={dateFilterPreset === 'custom' && dateRange && dateRange[0] && dateRange[1] 
+                              ? `${dateRange[0].format('YYYY-MM-DD')} 至 ${dateRange[1].format('YYYY-MM-DD')}` 
+                              : '自定义...'}
+                            data-custom-option="true"
                           >
-                            全选
-                          </Checkbox>
-                          <Text>
-                            共 {sortedAssets.length} 个素材
-                            {selectedType !== 'all' && (
-                              <span style={{ marginLeft: 8 }}>
-                                （类型：{selectedType === 'image' ? '图片' : selectedType === 'video' ? '视频' : '音频'}）
-                              </span>
-                            )}
-                            {selectedTagIds.length > 0 && (
-                              <span style={{ marginLeft: 8 }}>
-                                （筛选标签：{selectedTagIds.length}个）
-                              </span>
-                            )}
-                            {selectedAssetIds.length > 0 && (
-                              <span style={{ marginLeft: 8, color: '#1890ff' }}>
-                                已选择 {selectedAssetIds.length} 个
-                              </span>
-                            )}
-                          </Text>
-                        </Space>
-                        <Space>
-                          <Radio.Group
-                            value={sortOrder}
-                            onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-                            buttonStyle="solid"
-                          >
-                            <Radio.Button value="desc">
-                              <SortDescendingOutlined /> 最新优先
-                            </Radio.Button>
-                            <Radio.Button value="asc">
-                              <SortAscendingOutlined /> 最早优先
-                            </Radio.Button>
-                          </Radio.Group>
-                        </Space>
-                      </div>
-                    )}
+                            自定义...
+                          </Option>
+                        </Select>
+                        
+                        <Radio.Group
+                          value={sortOrder}
+                          onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                          buttonStyle="solid"
+                        >
+                          <Radio.Button value="desc">
+                            <SortDescendingOutlined /> 最新优先
+                          </Radio.Button>
+                          <Radio.Button value="asc">
+                            <SortAscendingOutlined /> 最早优先
+                          </Radio.Button>
+                        </Radio.Group>
+                      </Space>
+                    </div>
 
                     {sortedAssets.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
                         <InboxOutlined style={{ fontSize: '64px', marginBottom: 16 }} />
-                        <div>暂无素材，点击上方「导入素材」按钮开始使用</div>
+                        <div>暂无素材</div>
                       </div>
                     ) : (
                       <Row gutter={[16, 16]}>
@@ -517,6 +685,25 @@ const App: React.FC = () => {
         onTagUpdated={handleTagUpdated}
         onDeleteAsset={handleDeleteAsset}
       />
+
+      {/* 自定义时间弹窗 */}
+      <Modal
+        title="选择时间范围"
+        open={showCustomDateModal}
+        onCancel={handleCustomDateCancel}
+        footer={[
+          <Button key="cancel" onClick={handleCustomDateCancel}>取消</Button>,
+          <Button key="confirm" type="primary" onClick={handleCustomDateConfirm}>确认</Button>
+        ]}
+      >
+        <div style={{ padding: '16px 0' }}>
+          <RangePicker
+            value={customDateRange}
+            onChange={(dates) => setCustomDateRange(dates)}
+            style={{ width: '100%' }}
+          />
+        </div>
+      </Modal>
 
       {/* 导出 Modal */}
       <Modal

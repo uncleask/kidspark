@@ -198,11 +198,21 @@ export async function generateImage(
   }
 }
 
+// 将音频文件转为base64
+function audioToBase64(filePath: string): string {
+  const audioBuffer = fs.readFileSync(filePath);
+  const base64 = audioBuffer.toString('base64');
+  const ext = path.extname(filePath).toLowerCase().slice(1);
+  const mimeType = ext === 'mp3' ? 'audio/mpeg' : `audio/${ext}`;
+  return `data:${mimeType};base64,${base64}`;
+}
+
 // 创建图生视频任务
 export async function generateVideo(
   imagePath: string,
   prompt?: string,
-  modelConfig?: ModelConfig
+  modelConfig?: ModelConfig,
+  audioPath?: string
 ): Promise<TaskCreationResult> {
   const config = modelConfig || getDefaultModelConfig('video');
   if (!config) {
@@ -230,16 +240,27 @@ export async function generateVideo(
   
   if (isNewApi) {
     // 万相 2.7 视频格式：使用 media 格式
+    const mediaItems: any[] = [
+      {
+        type: 'first_frame',
+        url: base64Image
+      }
+    ];
+    
+    // 如果有音频，添加音频到 media
+    if (audioPath && fs.existsSync(audioPath)) {
+      const base64Audio = audioToBase64(audioPath);
+      mediaItems.push({
+        type: 'audio',
+        url: base64Audio
+      });
+    }
+    
     data = {
       model: config.model_id,
       input: {
         prompt: prompt || '让这张图片动起来，生成流畅的动态视频',
-        media: [
-          {
-            type: 'first_frame',
-            url: base64Image
-          }
-        ]
+        media: mediaItems
       },
       parameters: {
         resolution: extraParams.resolution || '720P',

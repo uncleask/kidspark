@@ -3,6 +3,8 @@ import { Asset, Tag, AiGeneration } from '../src/types';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   importFiles: () => ipcRenderer.invoke('import-files') as Promise<number[]>,
+  importFilesOnly: () => ipcRenderer.invoke('import-files-only') as Promise<number[]>,
+  importAudioFiles: () => ipcRenderer.invoke('import-audio-files') as Promise<number[]>,
   getAllAssets: () => ipcRenderer.invoke('get-all-assets') as Promise<Asset[]>,
   getAssetsByTag: (tagId: number) => ipcRenderer.invoke('get-assets-by-tag', tagId) as Promise<Asset[]>,
   getAssetsByTags: (tagIds: number[]) => ipcRenderer.invoke('get-assets-by-tags', tagIds) as Promise<Asset[]>,
@@ -14,8 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchTags: (query: string) => ipcRenderer.invoke('search-tags', query) as Promise<Tag[]>,
   deleteTag: (tagId: number) => ipcRenderer.invoke('delete-tag', tagId) as Promise<{ success: boolean }>,
   deleteAsset: (assetId: number) => ipcRenderer.invoke('delete-asset', assetId) as Promise<{ success: boolean }>,
-  searchAssets: (query: string) => ipcRenderer.invoke('search-assets', query) as Promise<Asset[]>,
+  searchAssets: (query: string, fileType?: 'image' | 'video' | 'audio') => ipcRenderer.invoke('search-assets', query, fileType) as Promise<Asset[]>,
   getAssetsByType: (fileType: 'image' | 'video' | 'audio') => ipcRenderer.invoke('get-assets-by-type', fileType) as Promise<Asset[]>,
+  getAssetsByDateRange: (startDate: string, endDate: string) => ipcRenderer.invoke('get-assets-by-date-range', startDate, endDate) as Promise<Asset[]>,
   updateAssetDescription: (assetId: number, description: string) =>
     ipcRenderer.invoke('update-asset-description', assetId, description) as Promise<{ success: boolean }>,
   updateAssetPrompt: (assetId: number, prompt: string) =>
@@ -41,8 +44,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('get-child-generations', generationId) as Promise<any[]>,
   deleteAiGeneration: (generationId: number) =>
     ipcRenderer.invoke('delete-ai-generation', generationId) as Promise<{ success: boolean }>,
-  setMainGeneration: (generationId: number, originalAssetId: number) =>
-    ipcRenderer.invoke('set-main-generation', generationId, originalAssetId) as Promise<{ success: boolean }>,
+  setMainGeneration: (generationId: number, originalAssetId: number, generationType: string) =>
+    ipcRenderer.invoke('set-main-generation', generationId, originalAssetId, generationType) as Promise<{ success: boolean }>,
   unsetMainGeneration: (generationId: number) =>
     ipcRenderer.invoke('unset-main-generation', generationId) as Promise<{ success: boolean }>,
   importAiGeneration: (
@@ -62,8 +65,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // AI 生成
   wanxGenerateImage: (originalAssetId: number, imagePath: string, prompt?: string, modelId?: string) => 
     ipcRenderer.invoke('wanx-generate-image', originalAssetId, imagePath, prompt, modelId) as Promise<{ success: boolean; task_id?: string; error?: string }>,
-  wanxGenerateVideo: (originalAssetId: number, parentGenerationId: number | null, imagePath: string, prompt?: string, modelId?: string) => 
-    ipcRenderer.invoke('wanx-generate-video', originalAssetId, parentGenerationId, imagePath, prompt, modelId) as Promise<{ success: boolean; task_id?: string; error?: string }>,
+  wanxGenerateVideo: (originalAssetId: number, parentGenerationId: number | null, imagePath: string, prompt?: string, modelId?: string, audioPath?: string) => 
+    ipcRenderer.invoke('wanx-generate-video', originalAssetId, parentGenerationId, imagePath, prompt, modelId, audioPath) as Promise<{ success: boolean; task_id?: string; error?: string }>,
   wanxGetTaskStatus: (taskId: string, modelId?: string) => 
     ipcRenderer.invoke('wanx-get-task-status', taskId, modelId) as Promise<{ success: boolean; status?: string; url?: string; error?: string }>,
   wanxCompleteTask: (
@@ -74,13 +77,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     prompt?: string,
     modelId?: string
   ) => ipcRenderer.invoke('wanx-complete-task', taskId, originalAssetId, parentGenerationId, generationType, prompt, modelId) as Promise<{ success: boolean; generation?: AiGeneration; error?: string }>,
-  getAppDataDir: () => ipcRenderer.invoke('get-app-data-dir') as Promise<string>
+  getAppDataDir: () => ipcRenderer.invoke('get-app-data-dir') as Promise<string>,
+
+  // AI 任务持久化
+  upsertAiTask: (task: any) => ipcRenderer.invoke('upsert-ai-task', task) as Promise<{ success: boolean; id?: number; error?: string }>,
+  getActiveAiTasks: () => ipcRenderer.invoke('get-active-ai-tasks') as Promise<{ success: boolean; tasks?: any[]; error?: string }>,
+  getAllAiTasks: (limit?: number) => ipcRenderer.invoke('get-all-ai-tasks', limit) as Promise<{ success: boolean; tasks?: any[]; error?: string }>,
+  updateAiTaskStatus: (taskId: string, status: string, error?: string, errorCode?: string) => ipcRenderer.invoke('update-ai-task-status', taskId, status, error, errorCode) as Promise<{ success: boolean; error?: string }>,
+  setAiTaskTimeout: (taskId: string, isTimeout: boolean) => ipcRenderer.invoke('set-ai-task-timeout', taskId, isTimeout) as Promise<{ success: boolean; error?: string }>,
+  getActiveAiTaskCount: () => ipcRenderer.invoke('get-active-ai-task-count') as Promise<{ success: boolean; count?: number; error?: string }>,
+  deleteCompletedAiTasks: () => ipcRenderer.invoke('delete-completed-ai-tasks') as Promise<{ success: boolean; error?: string }>
 });
 
 declare global {
   interface Window {
     electronAPI: {
       importFiles: () => Promise<number[]>;
+      importFilesOnly: () => Promise<number[]>;
+      importAudioFiles: () => Promise<number[]>;
       getAllAssets: () => Promise<Asset[]>;
       getAssetsByTag: (tagId: number) => Promise<Asset[]>;
       getAssetsByTags: (tagIds: number[]) => Promise<Asset[]>;
@@ -90,8 +104,9 @@ declare global {
       searchTags: (query: string) => Promise<Tag[]>;
       deleteTag: (tagId: number) => Promise<{ success: boolean }>;
       deleteAsset: (assetId: number) => Promise<{ success: boolean }>;
-      searchAssets: (query: string) => Promise<Asset[]>;
+      searchAssets: (query: string, fileType?: 'image' | 'video' | 'audio') => Promise<Asset[]>;
       getAssetsByType: (fileType: 'image' | 'video' | 'audio') => Promise<Asset[]>;
+      getAssetsByDateRange: (startDate: string, endDate: string) => Promise<Asset[]>;
       updateAssetDescription: (assetId: number, description: string) => Promise<{ success: boolean }>;
       updateAssetPrompt: (assetId: number, prompt: string) => Promise<{ success: boolean }>;
       updateGenerationPrompt: (generationId: number, prompt: string) => Promise<{ success: boolean }>;
@@ -123,7 +138,7 @@ declare global {
 
       wanxGenerateImage: (originalAssetId: number, imagePath: string, prompt?: string, modelId?: string) => 
         Promise<{ success: boolean; task_id?: string; error?: string }>,
-      wanxGenerateVideo: (originalAssetId: number, parentGenerationId: number | null, imagePath: string, prompt?: string, modelId?: string) => 
+      wanxGenerateVideo: (originalAssetId: number, parentGenerationId: number | null, imagePath: string, prompt?: string, modelId?: string, audioPath?: string) => 
         Promise<{ success: boolean; task_id?: string; error?: string }>,
       wanxGetTaskStatus: (taskId: string, modelId?: string) => 
         Promise<{ success: boolean; status?: string; url?: string; error?: string }>,
@@ -136,6 +151,15 @@ declare global {
         modelId?: string
       ) => Promise<{ success: boolean; generation?: AiGeneration; error?: string }>,
       getAppDataDir: () => Promise<string>,
+
+      // AI 任务持久化
+      upsertAiTask: (task: any) => Promise<{ success: boolean; id?: number; error?: string }>,
+      getActiveAiTasks: () => Promise<{ success: boolean; tasks?: any[]; error?: string }>,
+      getAllAiTasks: (limit?: number) => Promise<{ success: boolean; tasks?: any[]; error?: string }>,
+      updateAiTaskStatus: (taskId: string, status: string, error?: string, errorCode?: string) => Promise<{ success: boolean; error?: string }>,
+      setAiTaskTimeout: (taskId: string, isTimeout: boolean) => Promise<{ success: boolean; error?: string }>,
+      getActiveAiTaskCount: () => Promise<{ success: boolean; count?: number; error?: string }>,
+      deleteCompletedAiTasks: () => Promise<{ success: boolean; error?: string }>,
     };
   }
 }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, clipboard, Menu } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import sharp from 'sharp';
@@ -7,6 +7,7 @@ import {
   getAssetsByTag,
   getAssetsByTags,
   getAssetsByType,
+  getAssetsByDateRange,
   getAllTags,
   getOrCreateTag,
   attachTagToAsset,
@@ -28,7 +29,16 @@ import {
   unsetMainGeneration,
   getAppDataDir,
   updateGenerationPrompt,
-  updateAssetPrompt
+  updateAssetPrompt,
+  upsertAiTask,
+  getActiveAiTasks,
+  getAllAiTasks,
+  updateAiTaskStatus,
+  setAiTaskTimeout,
+  getActiveAiTaskCount,
+  deleteCompletedAiTasks,
+  insertAiGenerationParam,
+  insertAssetImportSource
 } from './database';
 import { importFiles } from './fileHandler';
 import { importAiGenerationFile } from './fileHandler';
@@ -73,6 +83,27 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
 
+  // 关闭窗口前确认
+  mainWindow.on('close', (event) => {
+    event.preventDefault();
+    dialog.showMessageBox(mainWindow!, {
+      type: 'warning',
+      title: '确认关闭',
+      message: '确定要关闭软件吗？',
+      detail: '关闭后未完成的AI任务将在后台继续运行。',
+      buttons: ['取消', '确认关闭'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    }).then((result) => {
+      if (result.response === 1) {
+        // 用户确认关闭，销毁窗口
+        mainWindow?.destroy();
+        app.quit();
+      }
+    });
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -80,6 +111,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
+  createApplicationMenu();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -94,11 +126,124 @@ app.on('window-all-closed', () => {
   }
 });
 
+function createApplicationMenu() {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: '文件',
+      submenu: [
+        {
+          label: '导入素材',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => {
+            mainWindow?.webContents.send('menu-import-files');
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '退出',
+          accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
+          click: () => {
+            app.quit();
+          }
+        }
+      ]
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { label: '撤销', role: 'undo' },
+        { label: '重做', role: 'redo' },
+        { type: 'separator' },
+        { label: '剪切', role: 'cut' },
+        { label: '复制', role: 'copy' },
+        { label: '粘贴', role: 'paste' },
+        { label: '全选', role: 'selectAll' }
+      ]
+    },
+    {
+      label: '视图',
+      submenu: [
+        { label: '重新加载', role: 'reload' },
+        { label: '强制重新加载', role: 'forceReload' },
+        { label: '开发者工具', role: 'toggleDevTools' },
+        { type: 'separator' },
+        { label: '实际大小', role: 'resetZoom' },
+        { label: '放大', role: 'zoomIn' },
+        { label: '缩小', role: 'zoomOut' },
+        { type: 'separator' },
+        { label: '全屏', role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: '窗口',
+      submenu: [
+        { label: '最小化', role: 'minimize' },
+        { label: '关闭', role: 'close' }
+      ]
+    },
+    {
+      label: '帮助',
+      submenu: [
+        {
+          label: '关于 KidSpark',
+          click: () => {
+            dialog.showMessageBox(mainWindow!, {
+              type: 'info',
+              title: '关于 KidSpark',
+              message: 'KidSpark',
+              detail: 'AI 驱动的素材管理与创作工具\n版本: 1.0.0'
+            });
+          }
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
 ipcMain.handle('import-files', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openFile', 'openDirectory', 'multiSelections'],
     filters: [
       { name: 'Media Files', extensions: ['jpg', 'jpeg', 'png', 'heic', 'webp', 'gif', 'mp4', 'mov', 'avi', 'mkv', 'webm', 'mp3', 'm4a', 'wav', 'flac', 'aac'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled) {
+    return [];
+  }
+
+  return importFiles(result.filePaths);
+});
+
+// 仅选择多个文件（不包含目录）
+ipcMain.handle('import-files-only', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Media Files', extensions: ['jpg', 'jpeg', 'png', 'heic', 'webp', 'gif', 'mp4', 'mov', 'avi', 'mkv', 'webm', 'mp3', 'm4a', 'wav', 'flac', 'aac'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled) {
+    return [];
+  }
+
+  return importFiles(result.filePaths);
+});
+
+// 仅选择音频和视频文件
+ipcMain.handle('import-audio-files', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Audio & Video Files', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg'] },
+      { name: 'Audio Files', extensions: ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg'] },
+      { name: 'Video Files', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm'] },
       { name: 'All Files', extensions: ['*'] }
     ]
   });
@@ -155,12 +300,16 @@ ipcMain.handle('delete-asset', (_event: Electron.IpcMainInvokeEvent, assetId: nu
   return { success: true };
 });
 
-ipcMain.handle('search-assets', (_event: Electron.IpcMainInvokeEvent, query: string) => {
-  return searchAssets(query);
+ipcMain.handle('search-assets', (_event: Electron.IpcMainInvokeEvent, query: string, fileType?: 'image' | 'video' | 'audio') => {
+  return searchAssets(query, fileType);
 });
 
 ipcMain.handle('get-assets-by-type', (_event: Electron.IpcMainInvokeEvent, fileType: 'image' | 'video' | 'audio') => {
   return getAssetsByType(fileType);
+});
+
+ipcMain.handle('get-assets-by-date-range', (_event: Electron.IpcMainInvokeEvent, startDate: string, endDate: string) => {
+  return getAssetsByDateRange(startDate, endDate);
 });
 
 ipcMain.handle('update-asset-description', (_event: Electron.IpcMainInvokeEvent, assetId: number, description: string) => {
@@ -210,8 +359,8 @@ ipcMain.handle('delete-ai-generation', (_event: Electron.IpcMainInvokeEvent, gen
   return { success: true };
 });
 
-ipcMain.handle('set-main-generation', (_event: Electron.IpcMainInvokeEvent, generationId: number, originalAssetId: number) => {
-  setMainGeneration(generationId, originalAssetId);
+ipcMain.handle('set-main-generation', (_event: Electron.IpcMainInvokeEvent, generationId: number, originalAssetId: number, generationType: string) => {
+  setMainGeneration(generationId, originalAssetId, generationType);
   return { success: true };
 });
 
@@ -303,6 +452,16 @@ ipcMain.handle('wanx-generate-image', async (
   modelId?: string
 ) => {
   try {
+    // 检查活跃任务数量
+    const activeCount = getActiveAiTaskCount();
+    if (activeCount >= 3) {
+      return {
+        success: false,
+        error: '最多只能同时执行3个AI生成任务，请稍后再试',
+        errorCode: 'TASK_LIMIT_REACHED'
+      };
+    }
+
     let modelConfig: ModelConfig | undefined;
     if (modelId) {
       const configs = getModelConfigsByType('image');
@@ -320,6 +479,17 @@ ipcMain.handle('wanx-generate-image', async (
       };
     }
     
+    // 保存任务到数据库
+    upsertAiTask({
+      task_id: task.task_id,
+      task_type: 'image',
+      status: 'PENDING',
+      original_asset_id: originalAssetId,
+      prompt: prompt || null,
+      model_id: modelId || null,
+      request_id: task.requestId || null
+    });
+    
     return { success: true, task_id: task.task_id, original_asset_id: originalAssetId };
   } catch (error: any) {
     console.error('图生图失败:', error);
@@ -334,15 +504,26 @@ ipcMain.handle('wanx-generate-video', async (
   parentGenerationId: number | null,
   imagePath: string,
   prompt?: string,
-  modelId?: string
+  modelId?: string,
+  audioPath?: string
 ) => {
   try {
+    // 检查活跃任务数量
+    const activeCount = getActiveAiTaskCount();
+    if (activeCount >= 3) {
+      return {
+        success: false,
+        error: '最多只能同时执行3个AI生成任务，请稍后再试',
+        errorCode: 'TASK_LIMIT_REACHED'
+      };
+    }
+
     let modelConfig: ModelConfig | undefined;
     if (modelId) {
       const configs = getModelConfigsByType('video');
       modelConfig = configs.find(c => c.model_id === modelId);
     }
-    const task = await generateVideo(imagePath, prompt, modelConfig);
+    const task = await generateVideo(imagePath, prompt, modelConfig, audioPath);
     
     // 检查任务是否创建成功
     if (task.status === 'FAILED') {
@@ -353,6 +534,18 @@ ipcMain.handle('wanx-generate-video', async (
         requestId: task.requestId
       };
     }
+    
+    // 保存任务到数据库
+    upsertAiTask({
+      task_id: task.task_id,
+      task_type: 'video',
+      status: 'PENDING',
+      original_asset_id: originalAssetId,
+      parent_generation_id: parentGenerationId,
+      prompt: prompt || null,
+      model_id: modelId || null,
+      request_id: task.requestId || null
+    });
     
     return { success: true, task_id: task.task_id, original_asset_id: originalAssetId, parent_generation_id: parentGenerationId };
   } catch (error: any) {
@@ -409,6 +602,9 @@ ipcMain.handle('wanx-complete-task', async (
     }
     const result = await waitForTaskCompletion(taskId, modelConfig);
     
+    // 更新任务状态为成功
+    updateAiTaskStatus(taskId, 'SUCCEEDED');
+    
     // 保存文件到本地
     const dateDir = path.join(getAppDataDir(), 'ai_generations');
     if (!fs.existsSync(dateDir)) {
@@ -455,9 +651,100 @@ ipcMain.handle('wanx-complete-task', async (
     };
 
     const genId = insertAiGeneration(generationData);
+    
+    // 记录AI生成参数
+    try {
+      const modelConfig = modelId ? getAllModelConfigs().find(c => c.model_id === modelId) : undefined;
+      insertAiGenerationParam({
+        generation_id: genId,
+        task_id: taskId,
+        model_id: modelId || null,
+        model_name: modelConfig?.model_name || null,
+        parameters: modelConfig?.parameters || '{}',
+        prompt: prompt || null,
+        generation_type: generationType
+      });
+    } catch (paramErr) {
+      console.error('记录AI生成参数失败:', paramErr);
+    }
+    
     return { success: true, generation: { ...generationData, id: genId, created_at: new Date().toISOString() } };
   } catch (error: any) {
     console.error('任务完成失败:', error);
+    // 更新任务状态为失败
+    updateAiTaskStatus(taskId, 'FAILED', error.message);
+    return { success: false, error: error.message };
+  }
+});
+
+// ==================== AI 任务持久化 IPC ====================
+
+ipcMain.handle('upsert-ai-task', (_event: Electron.IpcMainInvokeEvent, task: any) => {
+  try {
+    const id = upsertAiTask(task);
+    return { success: true, id };
+  } catch (error: any) {
+    console.error('保存AI任务失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-active-ai-tasks', () => {
+  try {
+    const tasks = getActiveAiTasks();
+    return { success: true, tasks };
+  } catch (error: any) {
+    console.error('获取活跃AI任务失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-all-ai-tasks', (_event: Electron.IpcMainInvokeEvent, limit?: number) => {
+  try {
+    const tasks = getAllAiTasks(limit || 50);
+    return { success: true, tasks };
+  } catch (error: any) {
+    console.error('获取AI任务失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('update-ai-task-status', (_event: Electron.IpcMainInvokeEvent, taskId: string, status: string, error?: string, errorCode?: string) => {
+  try {
+    updateAiTaskStatus(taskId, status, error, errorCode);
+    return { success: true };
+  } catch (error: any) {
+    console.error('更新AI任务状态失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('set-ai-task-timeout', (_event: Electron.IpcMainInvokeEvent, taskId: string, isTimeout: boolean) => {
+  try {
+    setAiTaskTimeout(taskId, isTimeout);
+    return { success: true };
+  } catch (error: any) {
+    console.error('设置AI任务超时失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-active-ai-task-count', () => {
+  try {
+    const count = getActiveAiTaskCount();
+    return { success: true, count };
+  } catch (error: any) {
+    console.error('获取活跃AI任务数量失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('delete-completed-ai-tasks', () => {
+  try {
+    deleteCompletedAiTasks();
+    return { success: true };
+  } catch (error: any) {
+    console.error('删除已完成AI任务失败:', error);
     return { success: false, error: error.message };
   }
 });
