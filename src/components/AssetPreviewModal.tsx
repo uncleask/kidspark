@@ -57,11 +57,15 @@ type GeneratingTask = {
   parentGenerationId?: number | null;
   prompt?: string;
   modelId?: string;
+  error?: string;
+  errorCode?: string;
+  requestId?: string;
+  isTimeout?: boolean;
 };
 
 // 预设模型列表
 const PRESET_IMAGE_MODELS = [
-  { model_id: 'wanx2.7-image-pro', model_name: '万相 2.7 图生图 Pro', description: '复杂指令遵循和一致性全面提升，支持4K输出' },
+  { model_id: 'wan2.7-image-pro', model_name: '万相 2.7 图生图 Pro', description: '复杂指令遵循和一致性全面提升，支持4K输出' },
   { model_id: 'qwen-image-2.0', model_name: '通义万相 图生图 2.0', description: '融合图片生成与编辑，更快更强' },
 ];
 
@@ -98,6 +102,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
   const [imageModels, setImageModels] = useState<ModelConfig[]>([]);
   const [videoModels, setVideoModels] = useState<ModelConfig[]>([]);
   const [selectedImageModel, setSelectedImageModel] = useState<string>('');
+  const [isImagePreviewOpen, setIsImagePreviewOpen] = useState(false);
   const [selectedVideoModel, setSelectedVideoModel] = useState<string>('');
   const [activeGeneratingTasks, setActiveGeneratingTasks] = useState<GeneratingTask[]>([]);
   const [generationFilter, setGenerationFilter] = useState<'all' | 'image' | 'video'>('all');
@@ -145,6 +150,9 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
 
       for (let i = 0; i < newTasks.length; i++) {
         const task = newTasks[i];
+        // 跳过已超时或失败的任务
+        if (task.isTimeout || task.status === 'FAILED') continue;
+        
         try {
           const statusResult = await window.electronAPI.wanxGetTaskStatus(task.taskId, task.modelId);
           if (statusResult.success && statusResult.status) {
@@ -178,14 +186,26 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                 }
               } else if (statusResult.status === 'FAILED') {
                 message.error(statusResult.error || '生成失败');
-                newTasks.splice(i, 1);
-                i--;
+                newTasks[i] = { ...newTasks[i], status: 'FAILED', error: statusResult.error || '生成失败' };
                 shouldUpdate = true;
               }
             }
+          } else if (!statusResult.success) {
+            // 查询失败
+            newTasks[i] = { ...newTasks[i], status: 'FAILED', error: statusResult.error || '查询任务状态失败' };
+            shouldUpdate = true;
           }
         } catch (err) {
           console.error('查询任务状态失败:', err);
+        }
+        
+        // 检查是否超过1分钟（20轮 * 3秒）
+        if (task.status === 'PENDING' || task.status === 'RUNNING') {
+          const taskAge = Date.now() - (task as any).startTime;
+          if (taskAge > 60000) {
+            newTasks[i] = { ...newTasks[i], isTimeout: true };
+            shouldUpdate = true;
+          }
         }
       }
 
@@ -196,6 +216,56 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
 
     return () => clearInterval(pollInterval);
   }, [activeGeneratingTasks]);
+  
+  // 手动刷新任务状态
+  const handleManualRefreshTask = async (taskIndex: number) => {
+    const task = activeGeneratingTasks[taskIndex];
+    if (!task) return;
+    
+    try {
+      message.loading('正在查询任务状态...', 0);
+      const statusResult = await window.electronAPI.wanxGetTaskStatus(task.taskId, task.modelId);
+      message.destroy();
+      
+      if (statusResult.success) {
+        if (statusResult.status === 'SUCCEEDED') {
+          const completeResult = await window.electronAPI.wanxCompleteTask(
+            task.taskId,
+            task.originalAssetId,
+            task.parentGenerationId || null,
+            task.type === 'image' ? 'colored' : 'video',
+            task.prompt,
+            task.modelId
+          );
+          
+          if (completeResult.success) {
+            message.success(task.type === 'image' ? '彩色图生成成功' : '视频生成成功');
+            setActiveGeneratingTasks(prev => prev.filter((_, i) => i !== taskIndex));
+            await loadGenerations();
+          }
+        } else if (statusResult.status === 'FAILED') {
+          message.error(statusResult.error || '生成失败');
+          setActiveGeneratingTasks(prev => {
+            const newTasks = [...prev];
+            newTasks[taskIndex] = { ...newTasks[taskIndex], status: 'FAILED', error: statusResult.error || '生成失败', isTimeout: false };
+            return newTasks;
+          });
+        } else {
+          message.info(`任务状态：${statusResult.status === 'PENDING' ? '等待中' : statusResult.status === 'RUNNING' ? '处理中' : statusResult.status}`);
+          setActiveGeneratingTasks(prev => {
+            const newTasks = [...prev];
+            newTasks[taskIndex] = { ...newTasks[taskIndex], status: statusResult.status, isTimeout: false };
+            return newTasks;
+          });
+        }
+      } else {
+        message.error(statusResult.error || '查询失败');
+      }
+    } catch (err) {
+      message.destroy();
+      message.error('查询失败');
+    }
+  };
 
   const loadGenerations = async () => {
     if (!asset) return;
@@ -363,11 +433,26 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           status: 'PENDING',
           originalAssetId: asset.id,
           prompt: generatePrompt,
-          modelId: selectedImageModel
-        }]);
+          modelId: selectedImageModel,
+          startTime: Date.now()
+        } as any]);
         setGeneratePrompt('');
       } else {
-        message.error(result.error || '提交任务失败');
+        // 将错误信息添加到任务列表中展示
+        const errorMsg = result.error || '提交任务失败';
+        message.error(errorMsg);
+        setActiveGeneratingTasks(prev => [...prev, {
+          type: 'image',
+          taskId: 'failed-' + Date.now(),
+          status: 'FAILED',
+          originalAssetId: asset.id,
+          prompt: generatePrompt,
+          modelId: selectedImageModel,
+          error: errorMsg,
+          errorCode: (result as any).errorCode,
+          requestId: (result as any).requestId,
+          startTime: Date.now()
+        } as any]);
       }
     } catch (err) {
       message.error('生成失败');
@@ -406,11 +491,27 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
           originalAssetId: asset.id,
           parentGenerationId: parentId,
           prompt: generatePrompt,
-          modelId: selectedVideoModel
-        }]);
+          modelId: selectedVideoModel,
+          startTime: Date.now()
+        } as any]);
         setGeneratePrompt('');
       } else {
-        message.error(result.error || '提交任务失败');
+        // 将错误信息添加到任务列表中展示
+        const errorMsg = result.error || '提交任务失败';
+        message.error(errorMsg);
+        setActiveGeneratingTasks(prev => [...prev, {
+          type: 'video',
+          taskId: 'failed-' + Date.now(),
+          status: 'FAILED',
+          originalAssetId: asset.id,
+          parentGenerationId: parentId,
+          prompt: generatePrompt,
+          modelId: selectedVideoModel,
+          error: errorMsg,
+          errorCode: (result as any).errorCode,
+          requestId: (result as any).requestId,
+          startTime: Date.now()
+        } as any]);
       }
     } catch (err) {
       message.error('生成失败');
@@ -562,14 +663,23 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
 
   const handleDeleteAsset = async () => {
     if (!asset) return;
-    try {
-      await onDeleteAsset(asset.id);
-      message.success('素材已删除');
-      onClose();
-    } catch (error) {
-      console.error('Failed to delete asset:', error);
-      message.error('删除素材失败');
-    }
+    Modal.confirm({
+      title: '确认删除',
+      content: `确定要删除素材 "${asset.file_name}" 吗？删除后不可恢复。`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await onDeleteAsset(asset.id);
+          message.success('素材已删除');
+          onClose();
+        } catch (error) {
+          console.error('Failed to delete asset:', error);
+          message.error('删除素材失败');
+        }
+      }
+    });
   };
 
   const handleDeleteGeneration = async (genId: number, e: React.MouseEvent) => {
@@ -791,11 +901,11 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
             <div style={{ color: '#1890ff' }}>当前旋转：{rotation}°</div>
           )}
           <Space wrap>
-            <Button type="primary" icon={<PictureOutlined />} onClick={handleGenerateImage} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'image')}>
-              {activeGeneratingTasks.some(t => t.type === 'image') ? '生成中...' : 'AI生成图片'}
+            <Button type="primary" icon={<PictureOutlined />} onClick={handleGenerateImage} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'image' && t.status !== 'FAILED' && !t.isTimeout)}>
+              {activeGeneratingTasks.some(t => t.type === 'image' && t.status !== 'FAILED' && !t.isTimeout) ? '生成中...' : 'AI生成图片'}
             </Button>
-            <Button type="primary" icon={<VideoCameraOutlined />} onClick={handleGenerateVideo} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'video')}>
-              {activeGeneratingTasks.some(t => t.type === 'video') ? '生成中...' : 'AI视频'}
+            <Button type="primary" icon={<VideoCameraOutlined />} onClick={handleGenerateVideo} loading={isGenerating} disabled={activeGeneratingTasks.some(t => t.type === 'video' && t.status !== 'FAILED' && !t.isTimeout)}>
+              {activeGeneratingTasks.some(t => t.type === 'video' && t.status !== 'FAILED' && !t.isTimeout) ? '生成中...' : 'AI视频'}
             </Button>
             <Button icon={<UploadOutlined />} onClick={handleImportImage} loading={isGenerating}>导入图片</Button>
             <Button icon={<UploadOutlined />} onClick={handleImportVideo} loading={isGenerating}>导入视频</Button>
@@ -822,7 +932,12 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
         {renderActionBar()}
         {fileType === 'image' ? (
           <div style={{ position: 'relative', zIndex: 1 }}>
-            <img src={`file://${filePath}?v=${imgRefreshKey}`} alt="preview" style={imageStyle} />
+            <img
+              src={`file://${filePath}?v=${imgRefreshKey}`}
+              alt="preview"
+              style={{ ...imageStyle, cursor: 'zoom-in' }}
+              onClick={() => setIsImagePreviewOpen(true)}
+            />
           </div>
         ) : fileType === 'video' ? (
           <video src={`file://${filePath}`} controls style={{ maxWidth: '100%', maxHeight: '60vh', display: 'block', margin: '0 auto' }} />
@@ -914,7 +1029,7 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
             <Form form={modelForm} onFinish={handleSaveModelConfig} layout="vertical">
               <Form.Item name="model_type" hidden><Input /></Form.Item>
               <Form.Item name="model_id" label="模型 ID" rules={[{ required: true }]}>
-                <Input disabled={!!editingModel.id} placeholder="例如: wanx2.7-image-pro" />
+                <Input disabled={!!editingModel.id} placeholder="例如: wan2.7-image-pro" />
               </Form.Item>
               <Form.Item name="model_name" label="模型名称" rules={[{ required: true }]}>
                 <Input placeholder="例如: 万相 2.7 图生图 Pro" />
@@ -1116,11 +1231,39 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
               <div style={{ textAlign: 'center', color: '#999', padding: '12px 0' }}>暂无进行中的任务</div>
             ) : (
               <Space direction="vertical" style={{ width: '100%' }} size="small">
-                {activeGeneratingTasks.map(task => (
-                  <Card key={task.taskId} size="small" style={{ background: '#fffbe6' }}>
-                    <Space>
-                      <AntTag color={task.type === 'image' ? 'green' : 'cyan'}>{task.type === 'image' ? <PictureOutlined /> : <VideoCameraOutlined />}{task.type === 'image' ? '彩色图' : '视频'}</AntTag>
-                      <AntTag color="processing">{task.status === 'PENDING' ? '等待中' : task.status === 'RUNNING' ? '处理中' : task.status}</AntTag>
+                {activeGeneratingTasks.map((task, index) => (
+                  <Card key={task.taskId} size="small" style={{ background: task.status === 'FAILED' ? '#fff1f0' : task.isTimeout ? '#f6ffed' : '#fffbe6' }}>
+                    <Space direction="vertical" style={{ width: '100%' }} size="small">
+                      <Space>
+                        <AntTag color={task.type === 'image' ? 'green' : 'cyan'}>{task.type === 'image' ? <PictureOutlined /> : <VideoCameraOutlined />}{task.type === 'image' ? '彩色图' : '视频'}</AntTag>
+                        {task.status === 'FAILED' ? (
+                          <AntTag color="error">失败</AntTag>
+                        ) : task.isTimeout ? (
+                          <AntTag color="warning">超时</AntTag>
+                        ) : (
+                          <AntTag color="processing">{task.status === 'PENDING' ? '等待中' : task.status === 'RUNNING' ? '处理中' : task.status}</AntTag>
+                        )}
+                      </Space>
+                      
+                      {/* 错误信息 */}
+                      {task.error && (
+                        <div style={{ fontSize: '11px', color: '#ff4d4f', wordBreak: 'break-all' }}>
+                          错误：{task.error}
+                          {task.errorCode && <span>（{task.errorCode}）</span>}
+                        </div>
+                      )}
+                      
+                      {/* 超时提示 */}
+                      {task.isTimeout && (
+                        <div style={{ fontSize: '11px', color: '#faad14' }}>
+                          任务处理时间较长，请手动刷新查看结果
+                        </div>
+                      )}
+                      
+                      {/* 操作按钮 */}
+                      <Button size="small" icon={<SyncOutlined />} onClick={() => handleManualRefreshTask(index)}>
+                        手动刷新
+                      </Button>
                     </Space>
                   </Card>
                 ))}
@@ -1154,6 +1297,53 @@ const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
       </Row>
 
       {renderModelConfigModal()}
+
+      {/* 图片全屏预览遮罩层 */}
+      {isImagePreviewOpen && getCurrentFileType() === 'image' && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.85)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'zoom-out'
+          }}
+          onClick={() => setIsImagePreviewOpen(false)}
+        >
+          <img
+            src={`file://${getCurrentFilePath()}?v=${imgRefreshKey}`}
+            alt="preview-full"
+            style={{
+              maxWidth: '95vw',
+              maxHeight: '95vh',
+              objectFit: 'contain',
+              transform: `rotate(${rotation}deg)`,
+              transition: 'transform 0.3s ease'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              top: '20px',
+              right: '20px',
+              color: '#fff',
+              fontSize: '24px',
+              cursor: 'pointer',
+              zIndex: 10000
+            }}
+            onClick={() => setIsImagePreviewOpen(false)}
+          >
+            ✕
+          </div>
+        </div>
+      )}
     </Modal>
   );
 };

@@ -309,6 +309,17 @@ ipcMain.handle('wanx-generate-image', async (
       modelConfig = configs.find(c => c.model_id === modelId);
     }
     const task = await generateImage(imagePath, prompt, modelConfig);
+    
+    // 检查任务是否创建成功
+    if (task.status === 'FAILED') {
+      return { 
+        success: false, 
+        error: task.error || '任务创建失败',
+        errorCode: task.errorCode,
+        requestId: task.requestId
+      };
+    }
+    
     return { success: true, task_id: task.task_id, original_asset_id: originalAssetId };
   } catch (error: any) {
     console.error('图生图失败:', error);
@@ -332,6 +343,17 @@ ipcMain.handle('wanx-generate-video', async (
       modelConfig = configs.find(c => c.model_id === modelId);
     }
     const task = await generateVideo(imagePath, prompt, modelConfig);
+    
+    // 检查任务是否创建成功
+    if (task.status === 'FAILED') {
+      return { 
+        success: false, 
+        error: task.error || '任务创建失败',
+        errorCode: task.errorCode,
+        requestId: task.requestId
+      };
+    }
+    
     return { success: true, task_id: task.task_id, original_asset_id: originalAssetId, parent_generation_id: parentGenerationId };
   } catch (error: any) {
     console.error('图生视频失败:', error);
@@ -359,6 +381,9 @@ ipcMain.handle('wanx-get-task-status', async (
   }
 });
 
+// 已处理过的任务ID集合，防止重复保存
+const completedTasks = new Set<string>();
+
 // 等待任务完成并保存到本地
 ipcMain.handle('wanx-complete-task', async (
   _event: Electron.IpcMainInvokeEvent,
@@ -369,6 +394,13 @@ ipcMain.handle('wanx-complete-task', async (
   prompt?: string,
   modelId?: string
 ) => {
+  // 防止重复处理同一个任务
+  if (completedTasks.has(taskId)) {
+    console.log(`任务 ${taskId} 已处理过，跳过`);
+    return { success: true, message: '任务已处理过' };
+  }
+  completedTasks.add(taskId);
+
   try {
     let modelConfig: ModelConfig | undefined;
     if (modelId) {
